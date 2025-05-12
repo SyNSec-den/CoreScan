@@ -1,0 +1,2647 @@
+MODULE NF
+	VAR
+		model_id: 0..5;
+		CCA_subject: {none, 1, 2, 3, 4,5};
+		nfInstanceId: {none, 1, 2, 3, 4,5};
+		nfType: {none, nf_1, nf_2};
+		allowedNFTypes: array 1..2 of {none, nf_1, nf_2};
+		nfService1: NFService;
+
+	DEFINE
+		isNFInstanceValid := 
+			model_id != 0
+			& CCA_subject != none
+			& nfInstanceId != none
+			& CCA_subject = nfInstanceId
+			& nfType != none
+			& nfService1.isServiceInstanceValid
+			& ( !(allowedNFTypes[1] = none & allowedNFTypes[2] = none) ->  (allowedNFTypes[1] != allowedNFTypes[2] ))
+			-- populate index 1 first for all arrays
+			& (allowedNFTypes[2] != none -> allowedNFTypes[1] != none)
+		;
+		
+--
+MODULE NFService
+	VAR
+		serviceName: {none, service_1, service_2};
+		allowedNFTypes: array 1..2 of {none, nf_1, nf_2};
+		operation1: Operation;
+
+	DEFINE
+		isServiceInstanceValid := 
+			serviceName != none
+			& ( !(allowedNFTypes[1] = none & allowedNFTypes[2] = none) ->  (allowedNFTypes[1] != allowedNFTypes[2] ))
+			& operation1.isOperationValid
+			& operation1.opScope1 = serviceName
+			-- populate index 1 first for all arrays
+			& (allowedNFTypes[2] != none -> allowedNFTypes[1] != none)
+		;
+
+--
+MODULE Operation
+	VAR
+		allowedNFInstances: array 1..2 of {none, 1, 2, 3, 4,5};
+		allowedNFTypes: array 1..2 of {none, nf_1, nf_2};
+		opName: {none, op_1, op_2};
+		opScope1: {none, service_1, service_2};
+		opScope2: {none, op_scope_1, op_scope_2};
+		param1: Param;
+
+	DEFINE
+		isOperationValid := 
+			opName != none
+			& opScope2 in {none, op_scope_1, op_scope_2}
+			& (opScope2 = none <-> ((allowedNFTypes[1] = none & allowedNFTypes[2] = none) & (allowedNFInstances[1] = none & allowedNFInstances[2] = none)))
+			& (param1.name = none -> param1.value = 0)
+			& (param1.isSensitive -> param1.name != none)
+		;
+		
+		isParamVerified :=
+			isOperationValid 
+			& param1.isParamVerified
+		;
+
+--
+MODULE Param
+	VAR
+		isSensitive: boolean;
+		name: {none, p1, p2, p3, p4};
+		value: 0..2;
+		isVerified : boolean;
+
+	DEFINE
+		isParamVerificationReq := !(name in {none}) & isSensitive;
+		isParamVerified := 
+		case
+			!isParamVerificationReq : TRUE;
+			isParamVerificationReq & isVerified: TRUE;
+			isParamVerificationReq & !isVerified: FALSE;
+			TRUE: FALSE;
+		esac;
+--
+MODULE CCA(modelParam) -- TS 33.501 Clause-13.3.8
+	VAR
+		subject: {none, 1, 2, 3, 4,5};
+		-- iat: 
+		_exp: boolean;
+		aud_NFType: {none, NFp, NRF, Both};
+	ASSIGN
+		init(subject) := none;
+		-- init(iat) := 0;
+		init(_exp) := TRUE;
+		init(aud_NFType) := none;
+	DEFINE
+		isCCAvalid := 
+			subject != none
+			& _exp = FALSE
+			& aud_NFType != none
+		;
+--
+MODULE NFDiscoveryRequest(modelParam)
+	VAR
+		requesterID : {none, 1, 2, 3, 4,5}; -- req for slice; conflicting spec
+		requesterNFType : {none, nf_1, nf_2}; -- req
+		targetNFType : {none, nf_1, nf_2}; -- req
+		serviceName : {none, service_1, service_2}; -- mandatory for slices, otherwise optional; conflicting spec;
+		targetNfInstanceId : {none, 1, 2, 3, 4,5}; -- optional
+	
+	ASSIGN
+		---------- begin NFDiscoveryRequest init ----------
+		init(requesterID) := none;
+		init(targetNFType) := none;
+		init(requesterNFType) := none;
+		init(serviceName) := none;
+		init(targetNfInstanceId) := none;
+	
+	DEFINE
+		isNFDiscReqValid :=
+			requesterID != none
+			& targetNFType != none
+			& requesterNFType != none -- underspecified; mandatory for slices
+			;
+
+--
+MODULE AccessTokenRequest(modelParam)
+	VAR
+		nfInstanceId : {none, 1, 2, 3, 4,5}; -- requester nfInstanceId
+		requesterNFType : {none, nf_1, nf_2}; -- not included for specific producer
+
+		scopeService : {none, service_1, service_2};
+		scopeOperation : {none, op_scope_1, op_scope_2};
+		targetNFType : {none, nf_1, nf_2}; -- not included for specific producer
+		targetNfInstanceId : {none, 1, 2, 3, 4,5}; -- not included for specific nfType
+
+	ASSIGN
+		---------- begin AccessTokenRequest init ----------
+		init(nfInstanceId) := none;
+		init(scopeService) := none;
+		init(scopeOperation) := none;
+		init(targetNFType) := none;
+		init(targetNfInstanceId) := none;
+		init(requesterNFType) := none;
+
+	DEFINE
+		isATReqValid := 
+			nfInstanceId != none
+			& scopeService != none
+			-- & (targetNfInstanceId = none xor targetNFType = none)
+			& (modelParam.atrType = specificProducer -> (
+				targetNfInstanceId != none
+				& targetNFType = none
+				-- & requesterNFType = none -- not required for specificProducer; see below (i.e., can be present if requesterInfoReq)
+			))
+			& ((modelParam.atrType = specificNFType) -> (
+				targetNfInstanceId = none
+				& targetNFType != none 
+				& requesterNFType != none -- conditional: mandatory for specificNFType; Ambigiously also says, mandatory if operator policy requires
+			)) -- for the following two, need to import ModelParam for ATR module
+			& ((modelParam.requesterInfoReq)-> (
+				requesterNFType != none
+			))
+			;
+--
+MODULE AccessToken(modelParam)
+	VAR
+		sub : {none, 1, 2, 3, 4,5};
+		aud_NFInstanceId : {none, 1, 2, 3, 4,5};
+		aud_NFType : {none, nf_1, nf_2};
+		scopeService : {none, service_1, service_2};
+		scopeOperation : {none, op_scope_1, op_scope_2};
+		exp_ : boolean;
+ 
+	ASSIGN
+		init(sub) := none;
+		init(aud_NFInstanceId) := none;
+		init(aud_NFType) := none;
+		init(scopeService) := none;
+		init(scopeOperation) := none;
+		init(exp_) := TRUE;
+
+	DEFINE
+		isTokenValid := 
+			sub != none
+			& (aud_NFInstanceId = none xor aud_NFType = none)
+			& ((modelParam.atrType = specificProducer) -> (aud_NFInstanceId != none))
+			& ((modelParam.atrType = specificNFType) -> (aud_NFType != none))
+			& scopeService != none
+			& exp_ = FALSE;
+--
+MODULE ServiceRequest
+	VAR
+		subjectID : {none, 1, 2, 3, 4,5};
+		audienceID : {none, 1, 2, 3, 4,5};
+		service : {none, service_1, service_2}; 
+		operation : {none, op_1, op_2};
+		param1: Param;
+	DEFINE
+		isServiceRequestValid :=
+			subjectID != none
+			& audienceID != none
+			& service != none
+			& operation != none
+			;
+	
+	ASSIGN
+		---------- begin ServiceRequest init ----------
+		init(subjectID) := none;
+		init(audienceID) := none;
+		init(service) := none;
+		init(operation) := none;
+		init(param1.isSensitive) := FALSE;
+		init(param1.name) := none;
+		init(param1.value) := 0;
+--
+-- working
+MODULE ServiceRequestToScp(modelParam, cca)
+	VAR
+		------ servReq params ----
+		subjectID : {none, 1, 2, 3, 4,5};
+		service : {none, service_1, service_2}; -- 3gpp-Sbi-Access-Scope
+		operation : {none, op_1, op_2};
+		param1: Param;
+
+		------ DisReq Params (3gpp-Sbi-Discovery- params)----
+		targetNFType : {none, nf_1, nf_2};
+		requesterNFType : {none, nf_1, nf_2};
+
+		targetNfInstanceId : {none, 1, 2, 3, 4,5}; -- == audienceID
+
+		------ ATR params ----
+		scopeOperation : {none, op_scope_1, op_scope_2}; -- 3gpp-Sbi-Access-Scope
+
+		
+	DEFINE
+		isRequestValid :=
+			modelParam.CCAEnabled -> cca.isCCAvalid
+			& subjectID != none
+			& service != none
+			& operation != none
+			& scopeOperation != none
+			;
+	
+	ASSIGN
+		---------- begin ServiceRequest init ----------
+		init(subjectID) := none;
+		init(service) := none;
+		init(operation) := none;
+		init(param1.isSensitive) := FALSE;
+		init(param1.name) := none;
+		init(param1.value) := 0;
+		init(targetNFType) := none;
+		init(requesterNFType) := none;
+		init(targetNfInstanceId) := none;
+		init(scopeOperation) := none;
+--
+
+MODULE ModelParam
+	VAR
+		/-- communication type 
+			Direct: model B, 
+			IndirectSRonly: model C1: only SR is indirect; DR, ATR not
+			IndirectExceptDR: Model C2: SR and ATR are indirect; DR not 
+			IndirectFull: everything is done via single (service)Request only.--/
+		comType: {Direct, IndirectSRonly, IndirectExceptDR, IndirectFull}; 
+		atrType: {specificNFType, specificProducer};
+		
+		crossProfileCheckRequired: {DR, ATR, ALL}; -- if crossProfile check required for authorization
+
+		requesterInfoReq: boolean; -- models operator policy
+
+		CCAEnabled: boolean;
+		isCCAmalicious: boolean;
+
+	ASSIGN
+		next(comType) := comType;
+		next(atrType) := atrType;
+		next(crossProfileCheckRequired) := crossProfileCheckRequired;
+		next(requesterInfoReq) := requesterInfoReq;
+		next(CCAEnabled) := CCAEnabled;
+		next(isCCAmalicious) := isCCAmalicious;
+--
+
+MODULE main
+
+	VAR
+		--------- NF Configuration variable ----------------
+		consumer1: NF;
+		consumer2: NF;
+		producer1: NF;
+		producer2: NF;
+		
+		-- nrf1: NF;
+		-- nrf2: NF;
+
+		-- scp1: NF;
+		-- scp2: NF;
+
+		------------------- OAM----------------
+		OAMConsumerApprove: boolean;
+		OAMProducerApprove: boolean;
+
+		-------------------- Update------------------------
+		-- 0: no update; 1: everything; 2: most things 3: only some
+		updateLevelConsumer: 0..3;
+		updateLevelProducer: 0..3;
+
+		updateSRToScp: boolean;
+		updateDiscoveryRequest: boolean;
+		updateATRequest: boolean;
+		updateServiceRequest: boolean;
+
+		--------- Adversary Control variable ----------------
+		adversaryPresent : boolean;
+		adversarySRToScp: boolean;
+		adversaryDiscoveryRequest: boolean;
+		adversaryATRequest: boolean;
+		adversaryServiceRequest: boolean;
+		
+		------------------------ other params-----------
+
+		s1: protocol(consumer1,consumer2,producer1,producer2,OAMConsumerApprove,OAMProducerApprove,adversaryPresent,adversarySRToScp,adversaryDiscoveryRequest,adversaryATRequest,adversaryServiceRequest,updateSRToScp,updateDiscoveryRequest,updateATRequest,updateServiceRequest);
+		-- Comment out/uncomment the following line to disable/enable the 2nd consumer. 
+		-- s2: protocol(consumer1,consumer2,producer1,producer2,OAMConsumerApprove,OAMProducerApprove,adversaryPresent,adversarySRToScp,adversaryDiscoveryRequest,adversaryATRequest,adversaryServiceRequest,updateSRToScp,updateDiscoveryRequest,updateATRequest,updateServiceRequest);
+
+	INVAR constraints;
+	INVAR 
+		consumer1.isNFInstanceValid
+		& consumer2.isNFInstanceValid
+		& producer1.isNFInstanceValid
+		& producer2.isNFInstanceValid;
+
+	/-- Property no_ce: 
+
+		--/
+		LTLSPEC NAME no_ce :=
+		G(   
+			------------OAM control-----------
+			OAMConsumerApprove
+			& OAMProducerApprove
+			------------NF update control---------
+			& updateLevelConsumer = 0
+			& updateLevelProducer = 0
+			------------adversary control---------
+			& adversaryPresent
+			& !adversarySRToScp
+			& !adversaryDiscoveryRequest
+			& !adversaryATRequest
+			& !adversaryServiceRequest
+			------------Packet update control---------
+			& !updateSRToScp
+			& !updateDiscoveryRequest
+			& !updateServiceRequest
+			& !updateATRequest
+			------------others-----------------
+		)
+		->
+		G(
+			((s1.serviceRequest.service = s1.producer.nfService1.serviceName & s1.isServiceReqGranted) ->(
+				(( !((s1.producer.nfService1.allowedNFTypes[1] = none) & (s1.producer.nfService1.allowedNFTypes[2] = none)) )-> (
+					(
+						(s1.consumer.nfType in {s1.producer.nfService1.allowedNFTypes[1], s1.producer.nfService1.allowedNFTypes[2]})
+					)
+				))
+			))
+		);
+
+
+	DEFINE
+		constraints :=
+			isNFServiceNFTypeConsistent
+			& isOpNameOpScopeConsistent
+			& isOpNameNFServiceNameConsistent
+			& isOpNameParamConsistent
+			& isOpScopeAuthAttribConsistent
+			& isOpParamSensitivityConsistent
+			& ServReqConsistencyForSCP
+		;
+	
+		-- nfServiceName - nf type consistency for NF config generation
+		isNFServiceNFTypeConsistent :=
+			(s1.consumer1.nfService1.serviceName = s1.consumer2.nfService1.serviceName -> s1.consumer1.nfType = s1.consumer2.nfType)
+			& (s1.consumer1.nfService1.serviceName = s1.producer1.nfService1.serviceName -> s1.consumer1.nfType = s1.producer1.nfType)
+			& (s1.consumer1.nfService1.serviceName = s1.producer2.nfService1.serviceName -> s1.consumer1.nfType = s1.producer2.nfType)
+			& (s1.consumer2.nfService1.serviceName = s1.producer1.nfService1.serviceName -> s1.consumer2.nfType = s1.producer1.nfType)
+			& (s1.consumer2.nfService1.serviceName = s1.producer2.nfService1.serviceName -> s1.consumer2.nfType = s1.producer2.nfType)
+			& (s1.producer1.nfService1.serviceName = s1.producer2.nfService1.serviceName -> s1.producer1.nfType = s1.producer2.nfType)
+		;
+		-- opName - serviceName consistency for NF config generation
+		isOpNameNFServiceNameConsistent :=
+			((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.consumer2.nfService1.operation1.opName) 
+					-> s1.consumer1.nfService1.serviceName = s1.consumer2.nfService1.serviceName)
+			& ((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.producer1.nfService1.operation1.opName) 
+					-> s1.consumer1.nfService1.serviceName = s1.producer1.nfService1.serviceName)
+			& ((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) 
+					-> s1.consumer1.nfService1.serviceName = s1.producer2.nfService1.serviceName)
+
+			& ((s1.consumer2.nfService1.operation1.opName != none & s1.consumer2.nfService1.operation1.opName = s1.producer1.nfService1.operation1.opName) 
+					-> s1.consumer2.nfService1.serviceName = s1.producer1.nfService1.serviceName)
+			& ((s1.consumer2.nfService1.operation1.opName != none & s1.consumer2.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) 
+					-> s1.consumer2.nfService1.serviceName = s1.producer2.nfService1.serviceName)
+
+			& ((s1.producer1.nfService1.operation1.opName != none & s1.producer1.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) 
+					-> s1.producer1.nfService1.serviceName = s1.producer2.nfService1.serviceName)
+		;
+		-- opName - opScope2 consistency for NF config generation
+		isOpNameOpScopeConsistent :=
+			((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.consumer2.nfService1.operation1.opName) 
+					-> s1.consumer1.nfService1.operation1.opScope2 = s1.consumer2.nfService1.operation1.opScope2)
+			& ((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.producer1.nfService1.operation1.opName) 
+					-> s1.consumer1.nfService1.operation1.opScope2 = s1.producer1.nfService1.operation1.opScope2)
+			& ((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) 
+					-> s1.consumer1.nfService1.operation1.opScope2 = s1.producer2.nfService1.operation1.opScope2)
+			
+			& ((s1.consumer2.nfService1.operation1.opName != none & s1.consumer2.nfService1.operation1.opName = s1.producer1.nfService1.operation1.opName) 
+					-> s1.consumer2.nfService1.operation1.opScope2 = s1.producer1.nfService1.operation1.opScope2)
+			& ((s1.consumer2.nfService1.operation1.opName != none & s1.consumer2.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) 
+					-> s1.consumer2.nfService1.operation1.opScope2 = s1.producer2.nfService1.operation1.opScope2)
+			
+			& ((s1.producer1.nfService1.operation1.opName != none & s1.producer1.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) 
+					-> s1.producer1.nfService1.operation1.opScope2 = s1.producer2.nfService1.operation1.opScope2)
+		;
+		-- opName - Param consistency for NF config generation
+		isOpNameParamConsistent := 
+			-- c1 <-> c2
+			((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.consumer2.nfService1.operation1.opName) -> (
+				s1.consumer1.nfService1.operation1.param1.name = s1.consumer2.nfService1.operation1.param1.name
+				& s1.consumer1.nfService1.operation1.param1.isSensitive = s1.consumer2.nfService1.operation1.param1.isSensitive
+			))
+			-- c1 <-> p1
+			& ((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.producer1.nfService1.operation1.opName) -> (
+				s1.consumer1.nfService1.operation1.param1.name = s1.producer1.nfService1.operation1.param1.name
+				& s1.consumer1.nfService1.operation1.param1.isSensitive = s1.producer1.nfService1.operation1.param1.isSensitive
+			))
+			-- c1 <-> p2
+			& ((s1.consumer1.nfService1.operation1.opName != none & s1.consumer1.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) -> (
+				s1.consumer1.nfService1.operation1.param1.name = s1.producer2.nfService1.operation1.param1.name
+				& s1.consumer1.nfService1.operation1.param1.isSensitive = s1.producer2.nfService1.operation1.param1.isSensitive
+			))
+			-- c2 <-> p1
+			& ((s1.consumer2.nfService1.operation1.opName != none & s1.consumer2.nfService1.operation1.opName = s1.producer1.nfService1.operation1.opName) -> (
+				s1.consumer2.nfService1.operation1.param1.name = s1.producer1.nfService1.operation1.param1.name
+				& s1.consumer2.nfService1.operation1.param1.isSensitive = s1.producer1.nfService1.operation1.param1.isSensitive
+			))
+			-- c2 <-> p2
+			& ((s1.consumer2.nfService1.operation1.opName != none & s1.consumer2.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) -> (
+				s1.consumer2.nfService1.operation1.param1.name = s1.producer2.nfService1.operation1.param1.name
+				& s1.consumer2.nfService1.operation1.param1.isSensitive = s1.producer2.nfService1.operation1.param1.isSensitive
+			))
+			-- p1 <-> p2
+			& ((s1.producer1.nfService1.operation1.opName != none & s1.producer1.nfService1.operation1.opName = s1.producer2.nfService1.operation1.opName) -> (
+				s1.producer1.nfService1.operation1.param1.name = s1.producer2.nfService1.operation1.param1.name
+				& s1.producer1.nfService1.operation1.param1.isSensitive = s1.producer2.nfService1.operation1.param1.isSensitive
+			))
+		;
+		-- opScope – allowedNFTypes and allowedNFInstances consistency
+		isOpScopeAuthAttribConsistent:= 
+			-- c1 <-> c2
+			((s1.consumer1.nfService1.operation1.opScope2 != none & s1.consumer1.nfService1.operation1.opScope2 = s1.consumer2.nfService1.operation1.opScope2) -> (
+				s1.consumer1.nfService1.operation1.allowedNFInstances[1] = s1.consumer2.nfService1.operation1.allowedNFInstances[1]
+				& s1.consumer1.nfService1.operation1.allowedNFInstances[2] = s1.consumer2.nfService1.operation1.allowedNFInstances[2]
+				& s1.consumer1.nfService1.operation1.allowedNFTypes[1] = s1.consumer2.nfService1.operation1.allowedNFTypes[1]
+				& s1.consumer1.nfService1.operation1.allowedNFTypes[2] = s1.consumer2.nfService1.operation1.allowedNFTypes[2]
+			))
+			-- c1 <-> p1
+			& ((s1.consumer1.nfService1.operation1.opScope2 != none & s1.consumer1.nfService1.operation1.opScope2 = s1.producer1.nfService1.operation1.opScope2) -> (
+				s1.consumer1.nfService1.operation1.allowedNFInstances[1] = s1.producer1.nfService1.operation1.allowedNFInstances[1]
+				& s1.consumer1.nfService1.operation1.allowedNFInstances[2] = s1.producer1.nfService1.operation1.allowedNFInstances[2]
+				& s1.consumer1.nfService1.operation1.allowedNFTypes[1] = s1.producer1.nfService1.operation1.allowedNFTypes[1]
+				& s1.consumer1.nfService1.operation1.allowedNFTypes[2] = s1.producer1.nfService1.operation1.allowedNFTypes[2]
+			))
+			-- c1 <-> p2
+			& ((s1.consumer1.nfService1.operation1.opScope2 != none & s1.consumer1.nfService1.operation1.opScope2 = s1.producer2.nfService1.operation1.opScope2) -> (
+				s1.consumer1.nfService1.operation1.allowedNFInstances[1] = s1.producer2.nfService1.operation1.allowedNFInstances[1]
+				& s1.consumer1.nfService1.operation1.allowedNFInstances[2] = s1.producer2.nfService1.operation1.allowedNFInstances[2]
+				& s1.consumer1.nfService1.operation1.allowedNFTypes[1] = s1.producer2.nfService1.operation1.allowedNFTypes[1]
+				& s1.consumer1.nfService1.operation1.allowedNFTypes[2] = s1.producer2.nfService1.operation1.allowedNFTypes[2]
+			))
+			-- c2 <-> p1
+			& ((s1.consumer2.nfService1.operation1.opScope2 != none & s1.consumer2.nfService1.operation1.opScope2 = s1.producer1.nfService1.operation1.opScope2) -> (
+				s1.consumer2.nfService1.operation1.allowedNFInstances[1] = s1.producer1.nfService1.operation1.allowedNFInstances[1]
+				& s1.consumer2.nfService1.operation1.allowedNFInstances[2] = s1.producer1.nfService1.operation1.allowedNFInstances[2]
+				& s1.consumer2.nfService1.operation1.allowedNFTypes[1] = s1.producer1.nfService1.operation1.allowedNFTypes[1]
+				& s1.consumer2.nfService1.operation1.allowedNFTypes[2] = s1.producer1.nfService1.operation1.allowedNFTypes[2]
+			))
+			-- c2 <-> p2
+			& ((s1.consumer2.nfService1.operation1.opScope2 != none & s1.consumer2.nfService1.operation1.opScope2 = s1.producer2.nfService1.operation1.opScope2) -> (
+				s1.consumer2.nfService1.operation1.allowedNFInstances[1] = s1.producer2.nfService1.operation1.allowedNFInstances[1]
+				& s1.consumer2.nfService1.operation1.allowedNFInstances[2] = s1.producer2.nfService1.operation1.allowedNFInstances[2]
+				& s1.consumer2.nfService1.operation1.allowedNFTypes[1] = s1.producer2.nfService1.operation1.allowedNFTypes[1]
+				& s1.consumer2.nfService1.operation1.allowedNFTypes[2] = s1.producer2.nfService1.operation1.allowedNFTypes[2]
+			))
+			-- p1 <-> p2
+			& ((s1.producer1.nfService1.operation1.opScope2 != none & s1.producer1.nfService1.operation1.opScope2 = s1.producer2.nfService1.operation1.opScope2) -> (
+				s1.producer1.nfService1.operation1.allowedNFInstances[1] = s1.producer2.nfService1.operation1.allowedNFInstances[1]
+				& s1.producer1.nfService1.operation1.allowedNFInstances[2] = s1.producer2.nfService1.operation1.allowedNFInstances[2]
+				& s1.producer1.nfService1.operation1.allowedNFTypes[1] = s1.producer2.nfService1.operation1.allowedNFTypes[1]
+				& s1.producer1.nfService1.operation1.allowedNFTypes[2] = s1.producer2.nfService1.operation1.allowedNFTypes[2]
+			))
+		;
+		-- Param-sensitivity consistency for NF config generation
+		isOpParamSensitivityConsistent := 
+			-- c1 <-> c2
+			((s1.consumer1.nfService1.operation1.param1.name != none & s1.consumer1.nfService1.operation1.param1.name = s1.consumer2.nfService1.operation1.param1.name) -> (
+				s1.consumer1.nfService1.operation1.param1.isSensitive = s1.consumer2.nfService1.operation1.param1.isSensitive
+			))
+			-- c1 <-> p1
+			& ((s1.consumer1.nfService1.operation1.param1.name != none & s1.consumer1.nfService1.operation1.param1.name = s1.producer1.nfService1.operation1.param1.name) -> (
+				s1.consumer1.nfService1.operation1.param1.isSensitive = s1.producer1.nfService1.operation1.param1.isSensitive
+			))
+			-- c1 <-> p2
+			& ((s1.consumer1.nfService1.operation1.param1.name != none & s1.consumer1.nfService1.operation1.param1.name = s1.producer2.nfService1.operation1.param1.name) -> (
+				s1.consumer1.nfService1.operation1.param1.isSensitive = s1.producer2.nfService1.operation1.param1.isSensitive
+			))
+			-- c2 <-> p1
+			& ((s1.consumer2.nfService1.operation1.param1.name != none & s1.consumer2.nfService1.operation1.param1.name = s1.producer1.nfService1.operation1.param1.name) -> (
+				s1.consumer2.nfService1.operation1.param1.isSensitive = s1.producer1.nfService1.operation1.param1.isSensitive
+			))
+			-- c2 <-> p2
+			& ((s1.consumer2.nfService1.operation1.param1.name != none & s1.consumer2.nfService1.operation1.param1.name = s1.producer2.nfService1.operation1.param1.name) -> (
+				s1.consumer2.nfService1.operation1.param1.isSensitive = s1.producer2.nfService1.operation1.param1.isSensitive
+			))
+			-- p1 <-> p2
+			& ((s1.producer1.nfService1.operation1.param1.name != none & s1.producer1.nfService1.operation1.param1.name = s1.producer2.nfService1.operation1.param1.name) -> (
+				s1.producer1.nfService1.operation1.param1.isSensitive = s1.producer2.nfService1.operation1.param1.isSensitive
+			))
+		;
+		-- serviceRequestToScp – serviceRequest consistency
+		ServReqConsistencyForSCP := 
+		TRUE;
+			-- (s1.modelParam.comType = IndirectFull & s1.serviceRequest.isServiceRequestValid) -> ((
+			-- 	s1.serviceRequestToScp.operation = s1.serviceRequest.operation
+			-- 	& s1.serviceRequestToScp.service = s1.serviceRequest.service
+			-- ));
+
+
+	ASSIGN
+		--------- environment variables ----------------
+		init(consumer1.model_id) := 1;
+		init(consumer1.CCA_subject) := 1;
+		init(consumer1.nfInstanceId) := 1;
+
+		init(consumer2.model_id) := 2;
+		init(consumer2.CCA_subject) := 2;
+		init(consumer2.nfInstanceId) := 2;
+	
+		init(producer1.model_id) := 3;
+		init(producer1.CCA_subject) := 3;
+		init(producer1.nfInstanceId) := 3;
+
+		init(producer2.model_id) := 4;
+		init(producer2.CCA_subject) := 4;
+		init(producer2.nfInstanceId) := 4;
+
+		next(consumer1.model_id) := consumer1.model_id;
+		next(consumer1.CCA_subject) := case
+			(!OAMConsumerApprove) : consumer1.CCA_subject;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.CCA_subject;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.CCA_subject;
+			TRUE: consumer1.CCA_subject;
+		esac;
+		next(consumer1.nfInstanceId) := case
+			(!OAMConsumerApprove) : consumer1.nfInstanceId;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfInstanceId;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfInstanceId;
+			TRUE: consumer1.nfInstanceId;
+		esac;
+		
+		next(consumer1.nfType) := case
+			(!OAMConsumerApprove) : consumer1.nfType;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfType;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfType;
+			TRUE: consumer1.nfType;
+		esac;
+		next(consumer1.allowedNFTypes[1]) := case
+			(!OAMConsumerApprove) : consumer1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.allowedNFTypes[1];
+			TRUE: consumer1.allowedNFTypes[1];
+		esac;
+		next(consumer1.allowedNFTypes[2]) := case
+			(!OAMConsumerApprove) : consumer1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.allowedNFTypes[2];
+			TRUE: consumer1.allowedNFTypes[2];
+		esac;
+
+		next(consumer1.nfService1.allowedNFTypes[1]) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.allowedNFTypes[1];
+			TRUE: consumer1.nfService1.allowedNFTypes[1];
+		esac;
+		next(consumer1.nfService1.allowedNFTypes[2]) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.allowedNFTypes[2];
+			TRUE: consumer1.nfService1.allowedNFTypes[2];
+		esac;
+		
+		next(consumer1.nfService1.serviceName) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.serviceName;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfService1.serviceName;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.serviceName;
+			TRUE: consumer1.nfService1.serviceName;
+		esac;
+		
+		next(consumer1.nfService1.operation1.allowedNFInstances[1]) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.allowedNFInstances[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.allowedNFInstances[1];
+			TRUE: consumer1.nfService1.operation1.allowedNFInstances[1];
+		esac;
+		next(consumer1.nfService1.operation1.allowedNFInstances[2]) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.allowedNFInstances[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.allowedNFInstances[2];
+			TRUE: consumer1.nfService1.operation1.allowedNFInstances[2];
+		esac;
+		next(consumer1.nfService1.operation1.allowedNFTypes[1]) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.allowedNFTypes[1];
+			TRUE: consumer1.nfService1.operation1.allowedNFTypes[1];
+		esac;
+		next(consumer1.nfService1.operation1.allowedNFTypes[2]) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.allowedNFTypes[2];
+			TRUE: consumer1.nfService1.operation1.allowedNFTypes[2];
+		esac;
+		next(consumer1.nfService1.operation1.opName) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, op_1, op_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.opName;
+			TRUE: consumer1.nfService1.operation1.opName;
+		esac;
+		next(consumer1.nfService1.operation1.opScope1) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.opScope1;
+			TRUE: consumer1.nfService1.operation1.opScope1;
+		esac;
+		next(consumer1.nfService1.operation1.opScope2) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, op_scope_1, op_scope_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.opScope2;
+			TRUE: consumer1.nfService1.operation1.opScope2;
+		esac;
+
+		next(consumer1.nfService1.operation1.param1.isSensitive) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelConsumer = 1) : {TRUE, FALSE};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.param1.isSensitive;
+			TRUE: consumer1.nfService1.operation1.param1.isSensitive;
+		esac;
+		next(consumer1.nfService1.operation1.param1.name) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, p1, p2, p3, p4};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.param1.name;
+			TRUE: consumer1.nfService1.operation1.param1.name;
+		esac;
+		next(consumer1.nfService1.operation1.param1.value) := case
+			(!OAMConsumerApprove) : consumer1.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelConsumer = 1) : 0..2;
+			(adversaryPresent & updateLevelConsumer = 2) : consumer1.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer1.nfService1.operation1.param1.value;
+			TRUE: consumer1.nfService1.operation1.param1.value;
+		esac;
+
+
+
+		next(consumer2.model_id) := consumer2.model_id;
+		next(consumer2.CCA_subject) := case
+			(!OAMConsumerApprove) : consumer2.CCA_subject;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.CCA_subject;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.CCA_subject;
+			TRUE: consumer2.CCA_subject;
+		esac;
+		next(consumer2.nfInstanceId) := case
+			(!OAMConsumerApprove) : consumer2.nfInstanceId;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfInstanceId;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfInstanceId;
+			TRUE: consumer2.nfInstanceId;
+		esac;
+		next(consumer2.nfType) := case
+			(!OAMConsumerApprove) : consumer2.nfType;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfType;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfType;
+			TRUE: consumer2.nfType;
+		esac;
+		next(consumer2.allowedNFTypes[1]) := case
+			(!OAMConsumerApprove) : consumer2.allowedNFTypes[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.allowedNFTypes[1];
+			TRUE: consumer2.allowedNFTypes[1];
+		esac;
+		next(consumer2.allowedNFTypes[2]) := case
+			(!OAMConsumerApprove) : consumer2.allowedNFTypes[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.allowedNFTypes[2];
+			TRUE: consumer2.allowedNFTypes[2];
+		esac;
+		
+
+		next(consumer2.nfService1.allowedNFTypes[1]) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.allowedNFTypes[1];
+			TRUE: consumer2.nfService1.allowedNFTypes[1];
+		esac;
+		next(consumer2.nfService1.allowedNFTypes[2]) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.allowedNFTypes[2];
+			TRUE: consumer2.nfService1.allowedNFTypes[2];
+		esac;
+		next(consumer2.nfService1.serviceName) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.serviceName;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfService1.serviceName;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.serviceName;
+			TRUE: consumer2.nfService1.serviceName;
+		esac;
+		
+		
+		next(consumer2.nfService1.operation1.allowedNFInstances[1]) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.allowedNFInstances[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.allowedNFInstances[1];
+			TRUE: consumer2.nfService1.operation1.allowedNFInstances[1];
+		esac;
+		next(consumer2.nfService1.operation1.allowedNFInstances[2]) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.allowedNFInstances[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.allowedNFInstances[2];
+			TRUE: consumer2.nfService1.operation1.allowedNFInstances[2];
+		esac;
+		next(consumer2.nfService1.operation1.allowedNFTypes[1]) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.allowedNFTypes[1];
+			TRUE: consumer2.nfService1.operation1.allowedNFTypes[1];
+		esac;
+		next(consumer2.nfService1.operation1.allowedNFTypes[2]) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelConsumer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.allowedNFTypes[2];
+			TRUE: consumer2.nfService1.operation1.allowedNFTypes[2];
+		esac;
+		next(consumer2.nfService1.operation1.opName) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, op_1, op_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.opName;
+			TRUE: consumer2.nfService1.operation1.opName;
+		esac;
+		next(consumer2.nfService1.operation1.opScope1) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.opScope1;
+			TRUE: consumer2.nfService1.operation1.opScope1;
+		esac;
+		next(consumer2.nfService1.operation1.opScope2) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, op_scope_1, op_scope_2};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.opScope2;
+			TRUE: consumer2.nfService1.operation1.opScope2;
+		esac;
+
+		next(consumer2.nfService1.operation1.param1.isSensitive) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelConsumer = 1) : {TRUE, FALSE};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.param1.isSensitive;
+			TRUE: consumer2.nfService1.operation1.param1.isSensitive;
+		esac;
+		next(consumer2.nfService1.operation1.param1.name) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelConsumer = 1) : {none, p1, p2, p3, p4};
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.param1.name;
+			TRUE: consumer2.nfService1.operation1.param1.name;
+		esac;
+		next(consumer2.nfService1.operation1.param1.value) := case
+			(!OAMConsumerApprove) : consumer2.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelConsumer = 1) : 0..2;
+			(adversaryPresent & updateLevelConsumer = 2) : consumer2.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelConsumer = 3) : consumer2.nfService1.operation1.param1.value;
+			TRUE: consumer2.nfService1.operation1.param1.value;
+		esac;
+
+		next(producer1.model_id) := producer1.model_id;
+		next(producer1.CCA_subject) := case
+			(!OAMProducerApprove) : producer1.CCA_subject;
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.CCA_subject;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.CCA_subject;
+			TRUE: producer1.CCA_subject;
+		esac;
+		next(producer1.nfInstanceId) := case
+			(!OAMProducerApprove) : producer1.nfInstanceId;
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfInstanceId;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfInstanceId;
+			TRUE: producer1.nfInstanceId;
+		esac;
+		next(producer1.nfType) := case
+			(!OAMProducerApprove) : producer1.nfType;
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfType;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfType;
+			TRUE: producer1.nfType;
+		esac;
+		
+		next(producer1.allowedNFTypes[1]) := case
+			(!OAMProducerApprove) : producer1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.allowedNFTypes[1];
+			TRUE: producer1.allowedNFTypes[1];
+		esac;
+		next(producer1.allowedNFTypes[2]) := case
+			(!OAMProducerApprove) : producer1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.allowedNFTypes[2];
+			TRUE: producer1.allowedNFTypes[2];
+		esac;
+
+		next(producer1.nfService1.allowedNFTypes[1]) := case
+			(!OAMProducerApprove) : producer1.nfService1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.allowedNFTypes[1];
+			TRUE: producer1.nfService1.allowedNFTypes[1];
+		esac;
+		next(producer1.nfService1.allowedNFTypes[2]) := case
+			(!OAMProducerApprove) : producer1.nfService1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.allowedNFTypes[2];
+			TRUE: producer1.nfService1.allowedNFTypes[2];
+		esac;
+		next(producer1.nfService1.serviceName) := case
+			(!OAMProducerApprove) : producer1.nfService1.serviceName;
+			(adversaryPresent & updateLevelProducer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfService1.serviceName;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.serviceName;
+			TRUE: producer1.nfService1.serviceName;
+		esac;
+
+		next(producer1.nfService1.operation1.allowedNFInstances[1]) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.allowedNFInstances[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.allowedNFInstances[1];
+			TRUE: producer1.nfService1.operation1.allowedNFInstances[1];
+		esac;
+		next(producer1.nfService1.operation1.allowedNFInstances[2]) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.allowedNFInstances[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.allowedNFInstances[2];
+			TRUE: producer1.nfService1.operation1.allowedNFInstances[2];
+		esac;
+		next(producer1.nfService1.operation1.allowedNFTypes[1]) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.allowedNFTypes[1];
+			TRUE: producer1.nfService1.operation1.allowedNFTypes[1];
+		esac;
+		next(producer1.nfService1.operation1.allowedNFTypes[2]) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.allowedNFTypes[2];
+			TRUE: producer1.nfService1.operation1.allowedNFTypes[2];
+		esac;
+		next(producer1.nfService1.operation1.opName) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelProducer = 1) : {none, op_1, op_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.opName;
+			TRUE: producer1.nfService1.operation1.opName;
+		esac;
+		next(producer1.nfService1.operation1.opScope1) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelProducer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.opScope1;
+			TRUE: producer1.nfService1.operation1.opScope1;
+		esac;
+		next(producer1.nfService1.operation1.opScope2) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelProducer = 1) : {none, op_scope_1, op_scope_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.opScope2;
+			TRUE: producer1.nfService1.operation1.opScope2;
+		esac;
+
+		next(producer1.nfService1.operation1.param1.isSensitive) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelProducer = 1) : {TRUE, FALSE};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.param1.isSensitive;
+			TRUE: producer1.nfService1.operation1.param1.isSensitive;
+		esac;
+		next(producer1.nfService1.operation1.param1.name) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelProducer = 1) : {none, p1, p2, p3, p4};
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.param1.name;
+			TRUE: producer1.nfService1.operation1.param1.name;
+		esac;
+		next(producer1.nfService1.operation1.param1.value) := case
+			(!OAMProducerApprove) : producer1.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelProducer = 1) : 0..2;
+			(adversaryPresent & updateLevelProducer = 2) : producer1.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelProducer = 3) : producer1.nfService1.operation1.param1.value;
+			TRUE: producer1.nfService1.operation1.param1.value;
+		esac;
+
+
+		next(producer2.model_id) := producer2.model_id;
+		next(producer2.CCA_subject) := case
+			(!OAMProducerApprove) : producer2.CCA_subject;
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.CCA_subject;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.CCA_subject;
+			TRUE: producer2.CCA_subject;
+		esac;
+		next(producer2.nfInstanceId) := case
+			(!OAMProducerApprove) : producer2.nfInstanceId;
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfInstanceId;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfInstanceId;
+			TRUE: producer2.nfInstanceId;
+		esac;
+		next(producer2.nfType) := case
+			(!OAMProducerApprove) : producer2.nfType;
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfType;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfType;
+			TRUE: producer2.nfType;
+		esac;
+		
+		next(producer2.allowedNFTypes[1]) := case
+			(!OAMProducerApprove) : producer2.allowedNFTypes[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.allowedNFTypes[1];
+			TRUE: producer2.allowedNFTypes[1];
+		esac;
+		next(producer2.allowedNFTypes[2]) := case
+			(!OAMProducerApprove) : producer2.allowedNFTypes[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.allowedNFTypes[2];
+			TRUE: producer2.allowedNFTypes[2];
+		esac;
+
+		next(producer2.nfService1.allowedNFTypes[1]) := case
+			(!OAMProducerApprove) : producer2.nfService1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.allowedNFTypes[1];
+			TRUE: producer2.nfService1.allowedNFTypes[1];
+		esac;
+		next(producer2.nfService1.allowedNFTypes[2]) := case
+			(!OAMProducerApprove) : producer2.nfService1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.allowedNFTypes[2];
+			TRUE: producer2.nfService1.allowedNFTypes[2];
+		esac;
+		next(producer2.nfService1.serviceName) := case
+			(!OAMProducerApprove) : producer2.nfService1.serviceName;
+			(adversaryPresent & updateLevelProducer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfService1.serviceName;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.serviceName;
+			TRUE: producer2.nfService1.serviceName;
+		esac;
+
+		next(producer2.nfService1.operation1.allowedNFInstances[1]) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.allowedNFInstances[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.allowedNFInstances[1];
+			TRUE: producer2.nfService1.operation1.allowedNFInstances[1];
+		esac;
+		next(producer2.nfService1.operation1.allowedNFInstances[2]) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.allowedNFInstances[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 2) : {none, 1, 2, 3, 4,5};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.allowedNFInstances[2];
+			TRUE: producer2.nfService1.operation1.allowedNFInstances[2];
+		esac;
+		next(producer2.nfService1.operation1.allowedNFTypes[1]) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.allowedNFTypes[1];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.allowedNFTypes[1];
+			TRUE: producer2.nfService1.operation1.allowedNFTypes[1];
+		esac;
+		next(producer2.nfService1.operation1.allowedNFTypes[2]) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.allowedNFTypes[2];
+			(adversaryPresent & updateLevelProducer = 1) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 2) : {none, nf_1, nf_2};
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.allowedNFTypes[2];
+			TRUE: producer2.nfService1.operation1.allowedNFTypes[2];
+		esac;
+		next(producer2.nfService1.operation1.opName) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelProducer = 1) : {none, op_1, op_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfService1.operation1.opName;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.opName;
+			TRUE: producer2.nfService1.operation1.opName;
+		esac;
+		next(producer2.nfService1.operation1.opScope1) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelProducer = 1) : {none, service_1, service_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfService1.operation1.opScope1;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.opScope1;
+			TRUE: producer2.nfService1.operation1.opScope1;
+		esac;
+		next(producer2.nfService1.operation1.opScope2) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelProducer = 1) : {none, op_scope_1, op_scope_2};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfService1.operation1.opScope2;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.opScope2;
+			TRUE: producer2.nfService1.operation1.opScope2;
+		esac;
+
+		next(producer2.nfService1.operation1.param1.isSensitive) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelProducer = 1) : {TRUE, FALSE};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfService1.operation1.param1.isSensitive;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.param1.isSensitive;
+			TRUE: producer2.nfService1.operation1.param1.isSensitive;
+		esac;
+		next(producer2.nfService1.operation1.param1.name) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelProducer = 1) : {none, p1, p2, p3, p4};
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfService1.operation1.param1.name;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.param1.name;
+			TRUE: producer2.nfService1.operation1.param1.name;
+		esac;
+		next(producer2.nfService1.operation1.param1.value) := case
+			(!OAMProducerApprove) : producer2.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelProducer = 1) : 0..2;
+			(adversaryPresent & updateLevelProducer = 2) : producer2.nfService1.operation1.param1.value;
+			(adversaryPresent & updateLevelProducer = 3) : producer2.nfService1.operation1.param1.value;
+			TRUE: producer2.nfService1.operation1.param1.value;
+		esac;
+	--
+--
+
+MODULE protocol(consumer1,consumer2,producer1,producer2,OAMConsumerApprove,OAMProducerApprove,adversaryPresent,adversarySRToScp,adversaryDiscoveryRequest,adversaryATRequest,adversaryServiceRequest,updateSRToScp,updateDiscoveryRequest,updateATRequest,updateServiceRequest)
+	VAR
+		modelParam: ModelParam;  -- for multiple protocol instances, this objects value should not conflict as they work on shared NFs
+		--------- Structures ----------------
+		consumer : NF;
+		producer : NF;
+		prod_at_consumer : NF;
+
+
+		cca: CCA(modelParam);
+		serviceRequestToScp: ServiceRequestToScp(modelParam,cca);
+		
+		nfDiscoveryRequest: NFDiscoveryRequest(modelParam); 
+
+		accessTokenRequest : AccessTokenRequest(modelParam);
+
+		accessToken : AccessToken(modelParam);
+		serviceRequest: ServiceRequest;
+
+
+		--------- State variable ----------------
+		initConsumer: boolean;
+		initSRToScp: boolean;
+		initDiscoveryRequest: boolean;
+		initProducer: boolean;
+		initATRequest: boolean;
+		initServiceRequest: boolean;
+
+
+		--------- random variable----------------
+		selectConsumer : 1..2; -- choose one consumer randomly from consumer1 and consumer2
+		selectProducer : 1..2; -- choose one producer randomly from producer1 and producer2 (for prod_at_consumer)
+	--		
+	
+	DEFINE
+		------------ serviceRequestToScp packet logics ----------------
+		-- IndirectFull (model D)
+		sendSRToScp_IndirectFull_adversary :=
+			(modelParam.comType = IndirectFull & initConsumer & adversaryPresent & adversarySRToScp);
+		sendSRToScp_IndirectFull_init := 
+			(modelParam.comType = IndirectFull & initConsumer & !initSRToScp);
+		sendSRToScp_IndirectFull_update :=
+			(modelParam.comType = IndirectFull & initSRToScp & updateSRToScp);
+
+		-- IndirectSRonly (model C)
+		sendSRToScp_IndirectSRonly_adversary := 
+			(modelParam.comType = IndirectSRonly & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & adversaryPresent & adversarySRToScp);
+		sendSRToScp_IndirectSRonly_init := 
+			(modelParam.comType = IndirectSRonly & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & !initSRToScp);
+		sendSRToScp_IndirectSRonly_update :=
+			(modelParam.comType = IndirectSRonly & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & initSRToScp & updateSRToScp);
+		
+		------------ nfDiscovery packet logics ----------------
+		-- IndirectFull (model D)
+		sendDiscReq_IndirectFull_specProducer_init := 
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificProducer & initSRToScp & !initDiscoveryRequest); 
+		sendDiscReq_IndirectFull_specProducer_update :=
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificProducer & initDiscoveryRequest & updateDiscoveryRequest);
+		sendDiscReq_IndirectFull_specNFType_init :=
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificNFType & accessToken.isTokenValid & initSRToScp & !initDiscoveryRequest);
+		sendDiscReq_IndirectFull_specNFType_update :=
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificNFType & accessToken.isTokenValid & initDiscoveryRequest & updateDiscoveryRequest);
+
+		-- IndirectSRonly (model C)
+		sendDiscReq_IndirectSRonly_specProducer_init := 
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificProducer & initConsumer & !initDiscoveryRequest);
+		sendDiscReq_IndirectSRonly_specProducer_update :=
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificProducer & initDiscoveryRequest & updateDiscoveryRequest);
+		sendDiscReq_IndirectSRonly_specNFType_init := 
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificNFType & accessToken.isTokenValid & initConsumer & !initDiscoveryRequest);
+		sendDiscReq_IndirectSRonly_specNFType_update :=
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificNFType & accessToken.isTokenValid & initDiscoveryRequest & updateDiscoveryRequest);
+
+		------------ AccessTokenRequest packet logics ----------------
+		-- IndirectFull (model D)
+		sendATReq_IndirectFull_specProducer_init := 
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificProducer & initSRToScp & prod_at_consumer.isNFInstanceValid & !initATRequest);
+		sendATReq_IndirectFull_specProducer_update :=
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificProducer & prod_at_consumer.isNFInstanceValid & initATRequest & updateATRequest);
+		sendATReq_IndirectFull_specNFType_init :=
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificNFType & initSRToScp & !initATRequest);
+		sendATReq_IndirectFull_specNFType_update :=
+			(modelParam.comType = IndirectFull & modelParam.atrType = specificNFType & initATRequest & updateATRequest);
+		
+		-- IndirectSRonly (model C)
+		sendATReq_IndirectSRonly_specProducer_init := 
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificProducer & initConsumer & prod_at_consumer.isNFInstanceValid & !initATRequest);
+		sendATReq_IndirectSRonly_specProducer_update :=
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificProducer & prod_at_consumer.isNFInstanceValid & initATRequest & updateATRequest);
+		sendATReq_IndirectSRonly_specNFType_init := 
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificNFType & initConsumer & !initATRequest);
+		sendATReq_IndirectSRonly_specNFType_update :=
+			(modelParam.comType = IndirectSRonly & modelParam.atrType = specificNFType & initATRequest & updateATRequest);
+
+		------------ ServiceRequest packet logics ----------------
+		-- IndirectFull (model D) 
+		sendServReq_IndirectFull_adversary :=
+			modelParam.comType = IndirectFull & initSRToScp & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & adversaryPresent & adversaryServiceRequest;
+		sendServReq_IndirectFull_init :=
+			modelParam.comType = IndirectFull & initSRToScp & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & !initServiceRequest;
+		sendServReq_IndirectFull_update :=
+			modelParam.comType = IndirectFull & initSRToScp & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & initServiceRequest & updateServiceRequest;
+		
+		-- IndirectSRonly (model C)
+		sendServReq_IndirectSRonly_adversary :=
+			modelParam.comType = IndirectSRonly & initSRToScp & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & adversaryPresent & adversaryServiceRequest;
+		sendServReq_IndirectSRonly_init :=
+			modelParam.comType = IndirectSRonly & initSRToScp & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & !initServiceRequest;
+		sendServReq_IndirectSRonly_update :=
+			modelParam.comType = IndirectSRonly & initSRToScp & consumer.isNFInstanceValid & prod_at_consumer.isNFInstanceValid & accessToken.isTokenValid & initServiceRequest & updateServiceRequest;
+
+		------------ Authorization logics ----------------
+		foundNF := isNFDiscovered1 | isNFDiscovered2;
+		isNFDiscovered1 := case
+			TRUE: nrfIsNFDiscovered1;
+		esac;
+		isNFDiscovered2 := case
+			TRUE: nrfIsNFDiscovered2;
+		esac;
+		nrfFoundNF := nrfIsNFDiscovered1 | nrfIsNFDiscovered2;
+
+		ccaCheckForDR :=
+			((modelParam.CCAEnabled & modelParam.comType = IndirectFull)-> (
+				cca.isCCAvalid
+				& cca.subject = nfDiscoveryRequest.requesterID 
+				& cca.aud_NFType in {NRF, Both}
+			))
+		;
+
+		nrfIsNFDiscovered1 := case
+			ccaCheckForDR -- cca check
+			& nfDiscoveryRequest.isNFDiscReqValid
+			& producer1.isNFInstanceValid
+			& nfDiscoveryRequest.requesterID != producer1.nfInstanceId
+			/-- consumer profile vs. requester parameter check--/
+			& ((modelParam.crossProfileCheckRequired in {DR, ALL}) -> (
+				consumer.isNFInstanceValid
+				& nfDiscoveryRequest.requesterID = consumer.nfInstanceId
+				& nfDiscoveryRequest.requesterNFType = consumer.nfType
+			))
+			/-- target and authorization verification--/
+			& nfDiscoveryRequest.targetNFType = producer1.nfType
+			& ((nfDiscoveryRequest.targetNfInstanceId != none)->
+					nfDiscoveryRequest.targetNfInstanceId = producer1.nfInstanceId
+			)
+			& ((nfDiscoveryRequest.serviceName = none) ->
+				(   
+					producer1.nfService1.isServiceInstanceValid
+					& -- auth param: allowedNFTypes
+					(( !(producer1.nfService1.allowedNFTypes[1] = none & producer1.nfService1.allowedNFTypes[2] = none) )-> (
+							(nfDiscoveryRequest.requesterNFType in {producer1.nfService1.allowedNFTypes[1], producer1.nfService1.allowedNFTypes[2]})
+					))
+					&
+					((producer1.nfService1.allowedNFTypes[1] = none & producer1.nfService1.allowedNFTypes[2] = none) -> (
+						(( !(producer1.allowedNFTypes[1] = none & producer1.allowedNFTypes[2] = none) ) -> (
+								(nfDiscoveryRequest.requesterNFType in {producer1.allowedNFTypes[1], producer1.allowedNFTypes[2]})
+						)) 
+					))
+				)
+			)
+
+			& ( (nfDiscoveryRequest.serviceName != none)-> 
+				(
+					(nfDiscoveryRequest.serviceName in {producer1.nfService1.serviceName})
+					&
+					(   
+						producer1.nfService1.isServiceInstanceValid
+						& -- auth param: allowedNFTypes
+						(( !(producer1.nfService1.allowedNFTypes[1] = none & producer1.nfService1.allowedNFTypes[2] = none) )-> (
+								(nfDiscoveryRequest.requesterNFType in {producer1.nfService1.allowedNFTypes[1], producer1.nfService1.allowedNFTypes[2]})
+						))
+						&
+						((producer1.nfService1.allowedNFTypes[1] = none & producer1.nfService1.allowedNFTypes[2] = none) -> (
+							(( !(producer1.allowedNFTypes[1] = none & producer1.allowedNFTypes[2] = none) ) -> (
+									(nfDiscoveryRequest.requesterNFType in {producer1.allowedNFTypes[1], producer1.allowedNFTypes[2]})
+							)) 
+						))
+					)
+				)  
+			)
+				: TRUE;
+			TRUE: FALSE;
+		esac;
+ 
+		nrfIsNFDiscovered2 := case
+			ccaCheckForDR -- cca check
+			& nfDiscoveryRequest.isNFDiscReqValid
+			& producer2.isNFInstanceValid
+			& nfDiscoveryRequest.requesterID != producer2.nfInstanceId
+			/-- consumer profile vs. requester parameter check--/
+			& ((modelParam.crossProfileCheckRequired in {DR, ALL}) -> (
+				consumer.isNFInstanceValid
+				& nfDiscoveryRequest.requesterID = consumer.nfInstanceId
+				& nfDiscoveryRequest.requesterNFType = consumer.nfType
+			))
+			/-- target and authorization verification--/
+			& nfDiscoveryRequest.targetNFType = producer2.nfType
+			& ((nfDiscoveryRequest.targetNfInstanceId != none)->
+					nfDiscoveryRequest.targetNfInstanceId = producer2.nfInstanceId
+			)
+			& ((nfDiscoveryRequest.serviceName = none) ->
+				(   
+					producer2.nfService1.isServiceInstanceValid
+					& -- auth param: allowedNFTypes
+					(( !(producer2.nfService1.allowedNFTypes[1] = none & producer2.nfService1.allowedNFTypes[2] = none) )-> (
+							(nfDiscoveryRequest.requesterNFType in {producer2.nfService1.allowedNFTypes[1], producer2.nfService1.allowedNFTypes[2]})
+					))
+					&
+					((producer2.nfService1.allowedNFTypes[1] = none & producer2.nfService1.allowedNFTypes[2] = none) -> (
+						(( !(producer2.allowedNFTypes[1] = none & producer2.allowedNFTypes[2] = none) ) -> (
+								(nfDiscoveryRequest.requesterNFType in {producer2.allowedNFTypes[1], producer2.allowedNFTypes[2]})
+						)) 
+					))
+				)
+			)
+			& ( (nfDiscoveryRequest.serviceName != none)-> 
+				(
+					(nfDiscoveryRequest.serviceName in {producer2.nfService1.serviceName})
+					&
+					(   
+						producer2.nfService1.isServiceInstanceValid
+						& -- auth param: allowedNFTypes
+						(( !(producer2.nfService1.allowedNFTypes[1] = none & producer2.nfService1.allowedNFTypes[2] = none) )-> (
+								(nfDiscoveryRequest.requesterNFType in {producer2.nfService1.allowedNFTypes[1], producer2.nfService1.allowedNFTypes[2]})
+						))
+						&
+						((producer2.nfService1.allowedNFTypes[1] = none & producer2.nfService1.allowedNFTypes[2] = none) -> (
+							(( !(producer2.allowedNFTypes[1] = none & producer2.allowedNFTypes[2] = none) ) -> (
+									(nfDiscoveryRequest.requesterNFType in {producer2.allowedNFTypes[1], producer2.allowedNFTypes[2]})
+							)) 
+						))
+					)
+				)  
+			)
+				: TRUE;
+			TRUE: FALSE;
+		esac;
+
+		--------------------- Validate Access Token Request-----------------
+		ccaCheckForATR := 
+			((modelParam.CCAEnabled & modelParam.comType = IndirectFull)-> (
+				cca.isCCAvalid
+				& cca.subject = accessTokenRequest.nfInstanceId -- rethinnk if should be consumer.nfInstanceId
+				& cca.aud_NFType in {NRF, Both}
+			))
+		;
+
+		isAccessTokenReqAuthorized := case
+			ccaCheckForATR & modelParam.atrType = specificProducer &  isServiceLevelATReqAuthorizedForSpecificProducer : TRUE;
+			ccaCheckForATR & modelParam.atrType = specificNFType &  (isServiceLevelATReqAuthorizedForProducer1 | isServiceLevelATReqAuthorizedForProducer2 ) : TRUE;
+			TRUE: FALSE;
+		esac;
+		isOpLevelATReqAuthorized := case
+			modelParam.atrType = specificProducer &  isOpLevelATReqAuthorizedForSpecificProducer : TRUE;
+			modelParam.atrType = specificNFType &  (isOpLevelATReqAuthorizedForProducer1 | isOpLevelATReqAuthorizedForProducer2 ) : TRUE;
+			TRUE: FALSE;
+		esac;
+		------------- non-roaming case ----------------
+		isServiceLevelATReqAuthorizedForSpecificProducer := case
+			(
+				modelParam.atrType = specificProducer
+				& accessTokenRequest.isATReqValid
+				& producer.isNFInstanceValid
+				& (accessTokenRequest.nfInstanceId != accessTokenRequest.targetNfInstanceId)
+				/-- consumer profile vs. requester parameter check--/
+				& ((modelParam.crossProfileCheckRequired in {ATR, ALL}) -> (
+					consumer.isNFInstanceValid
+					& accessTokenRequest.nfInstanceId = consumer.nfInstanceId
+					& (accessTokenRequest.requesterNFType != none -> accessTokenRequest.requesterNFType = consumer.nfType)
+				))
+				/-- target and authorization verification--/
+				& (accessTokenRequest.targetNfInstanceId = producer.nfInstanceId)
+				& (accessTokenRequest.scopeService in {producer.nfService1.serviceName})
+
+				&
+				((accessTokenRequest.scopeService = producer.nfService1.serviceName) -> (
+					(producer.nfService1.isServiceInstanceValid)
+					& -- auth param: allowedNFTypes
+					(( !(producer.nfService1.allowedNFTypes[1] = none & producer.nfService1.allowedNFTypes[2] = none) )-> (
+							(accessTokenRequest.requesterNFType in {producer.nfService1.allowedNFTypes[1], producer.nfService1.allowedNFTypes[2]})
+							| accessTokenRequest.requesterNFType = none
+					))
+					&
+					((producer.nfService1.allowedNFTypes[1] = none & producer.nfService1.allowedNFTypes[2] = none) -> (
+						(( !(producer.allowedNFTypes[1] = none & producer.allowedNFTypes[2] = none) ) -> (
+								(accessTokenRequest.requesterNFType in {producer.allowedNFTypes[1], producer.allowedNFTypes[2]})
+								| accessTokenRequest.requesterNFType = none
+						))
+					))
+				))
+			)
+				: TRUE;
+			TRUE : FALSE;
+		esac;
+
+		isServiceLevelATReqAuthorizedForProducer1 := case
+			(
+				modelParam.atrType = specificNFType
+				& accessTokenRequest.isATReqValid
+				& producer1.isNFInstanceValid
+				/-- consumer profile vs. requester parameter check--/
+				& ((modelParam.crossProfileCheckRequired in {ATR, ALL}) -> (
+					consumer.isNFInstanceValid
+					& accessTokenRequest.nfInstanceId = consumer.nfInstanceId
+					& (accessTokenRequest.requesterNFType = consumer.nfType)
+				))
+				/-- target and authorization verification--/
+				& (accessTokenRequest.nfInstanceId != producer1.nfInstanceId)
+				& (accessTokenRequest.targetNFType = producer1.nfType)
+				& (accessTokenRequest.scopeService in {producer1.nfService1.serviceName})
+				-- targetPlmn - not available for non-roaming case
+				
+				& 
+				((accessTokenRequest.scopeService = producer1.nfService1.serviceName) -> (
+					(producer1.nfService1.isServiceInstanceValid)
+					& -- auth param: allowedNFTypes
+					(( !(producer1.nfService1.allowedNFTypes[1] = none & producer1.nfService1.allowedNFTypes[2] = none) )-> (
+							(accessTokenRequest.requesterNFType in {producer1.nfService1.allowedNFTypes[1], producer1.nfService1.allowedNFTypes[2]})
+							| accessTokenRequest.requesterNFType = none
+					))
+					&
+					((producer1.nfService1.allowedNFTypes[1] = none & producer1.nfService1.allowedNFTypes[2] = none) -> (
+						(( !(producer1.allowedNFTypes[1] = none & producer1.allowedNFTypes[2] = none) ) -> (
+								(accessTokenRequest.requesterNFType in {producer1.allowedNFTypes[1], producer1.allowedNFTypes[2]})
+								| accessTokenRequest.requesterNFType = none
+						))
+					))
+				))
+			)
+				: TRUE;
+			TRUE : FALSE;
+		esac;
+
+		isServiceLevelATReqAuthorizedForProducer2 := case
+			(
+				modelParam.atrType = specificNFType
+				& accessTokenRequest.isATReqValid
+				& producer2.isNFInstanceValid
+				/-- consumer profile vs. requester parameter check--/
+				& ((modelParam.crossProfileCheckRequired in {ATR, ALL}) -> (
+					consumer.isNFInstanceValid
+					& accessTokenRequest.nfInstanceId = consumer.nfInstanceId
+					& (accessTokenRequest.requesterNFType = consumer.nfType)
+				))
+				/-- target and authorization verification--/
+				& (accessTokenRequest.nfInstanceId != producer2.nfInstanceId)
+				& (accessTokenRequest.targetNFType = producer2.nfType)
+				& (accessTokenRequest.scopeService in {producer2.nfService1.serviceName})
+				-- targetPlmn - not available for non-roaming case
+				
+				& 
+				((accessTokenRequest.scopeService = producer2.nfService1.serviceName) -> (
+					(producer2.nfService1.isServiceInstanceValid)
+					& -- auth param: allowedNFTypes
+					(( !(producer2.nfService1.allowedNFTypes[1] = none & producer2.nfService1.allowedNFTypes[2] = none) )-> (
+							(accessTokenRequest.requesterNFType in {producer2.nfService1.allowedNFTypes[1], producer2.nfService1.allowedNFTypes[2]})
+							| accessTokenRequest.requesterNFType = none
+					))
+					&
+					((producer2.nfService1.allowedNFTypes[1] = none & producer2.nfService1.allowedNFTypes[2] = none) -> (
+						(( !(producer2.allowedNFTypes[1] = none & producer2.allowedNFTypes[2] = none) ) -> (
+								(accessTokenRequest.requesterNFType in {producer2.allowedNFTypes[1], producer2.allowedNFTypes[2]})
+								| accessTokenRequest.requesterNFType = none
+						))
+					))
+				))
+			)
+				: TRUE;
+			TRUE : FALSE;
+		esac;
+
+		isOpLevelATReqAuthorizedForSpecificProducer := case
+			(
+				-- & modelParam.atrType = specificProducer
+				isServiceLevelATReqAuthorizedForSpecificProducer
+
+				-- & accessTokenRequest.isATReqValid
+				-- & producer.isNFInstanceValid
+				-- & consumer.isNFInstanceValid
+				-- & (accessTokenRequest.nfInstanceId != accessTokenRequest.targetNfInstanceId)
+				
+				-- & (accessTokenRequest.targetNfInstanceId = producer.nfInstanceId)
+				-- & (accessTokenRequest.nfInstanceId = consumer.nfInstanceId)
+				
+				& accessTokenRequest.scopeOperation != none
+				&
+				(accessTokenRequest.scopeOperation in {producer.nfService1.operation1.opScope2})
+
+				& 
+				((accessTokenRequest.scopeOperation = producer.nfService1.operation1.opScope2) -> (
+					producer.nfService1.operation1.isOperationValid
+					& -- only allowedNFInstances relevant for specific producer
+					((!( producer.nfService1.operation1.allowedNFInstances[1] = none & producer.nfService1.operation1.allowedNFInstances[2] = none)) ->
+						(accessTokenRequest.nfInstanceId in {producer.nfService1.operation1.allowedNFInstances[1], producer.nfService1.operation1.allowedNFInstances[2]})
+					)
+					& -- when requesterInfoReq, need to check allowedNFTypes as well.
+					( modelParam.requesterInfoReq & modelParam.requesterInfoReq & (!(producer1.nfService1.operation1.allowedNFTypes[1] = none & producer1.nfService1.operation1.allowedNFTypes[2] = none)) ->
+						( accessTokenRequest.requesterNFType in {producer1.nfService1.operation1.allowedNFTypes[1], producer1.nfService1.operation1.allowedNFTypes[2]})
+					)
+					
+				))
+			)
+				: TRUE;
+			TRUE : FALSE;
+		esac;
+
+		isOpLevelATReqAuthorizedForProducer1 := case
+			(
+				-- & modelParam.atrType = specificNFType
+				isServiceLevelATReqAuthorizedForProducer1
+
+				-- & accessTokenRequest.isATReqValid
+				-- & producer1.isNFInstanceValid
+				-- & consumer.isNFInstanceValid
+				-- & (accessTokenRequest.nfInstanceId != producer1.nfInstanceId)
+					
+				-- & (accessTokenRequest.targetNFType = producer1.nfType)
+				-- & (accessTokenRequest.nfInstanceId = consumer.nfInstanceId)
+				
+				& accessTokenRequest.scopeOperation != none
+				&
+				(accessTokenRequest.scopeOperation in {producer1.nfService1.operation1.opScope2})
+
+				&
+				((accessTokenRequest.scopeOperation = producer1.nfService1.operation1.opScope2) -> (
+					producer1.nfService1.operation1.isOperationValid
+					& -- Aauth Param: requesterNFType
+					((!(producer1.nfService1.operation1.allowedNFTypes[1] = none & producer1.nfService1.operation1.allowedNFTypes[2] = none)) ->
+						( accessTokenRequest.requesterNFType in {producer1.nfService1.operation1.allowedNFTypes[1], producer1.nfService1.operation1.allowedNFTypes[2]})
+					)
+					& -- Aauth Param: nfInstanceId
+					(modelParam.requesterInfoReq & (!( producer1.nfService1.operation1.allowedNFInstances[1] = none & producer1.nfService1.operation1.allowedNFInstances[2] = none)) -> (
+							accessTokenRequest.nfInstanceId in {producer1.nfService1.operation1.allowedNFInstances[1], producer1.nfService1.operation1.allowedNFInstances[2]}
+						)
+					)
+				))
+			)
+				: TRUE;
+			TRUE : FALSE;
+		esac;
+		
+		isOpLevelATReqAuthorizedForProducer2 := case
+			(
+				-- modelParam.atrType = specificNFType
+				isServiceLevelATReqAuthorizedForProducer2
+
+				-- & accessTokenRequest.isATReqValid
+				-- & producer2.isNFInstanceValid
+				-- & consumer.isNFInstanceValid
+				-- & (accessTokenRequest.nfInstanceId != producer2.nfInstanceId)
+					
+				-- & (accessTokenRequest.targetNFType = producer2.nfType)
+				-- & (accessTokenRequest.nfInstanceId = consumer.nfInstanceId)
+				
+				& accessTokenRequest.scopeOperation != none
+				&
+				(accessTokenRequest.scopeOperation in {producer2.nfService1.operation1.opScope2})
+
+				&
+				((accessTokenRequest.scopeOperation = producer2.nfService1.operation1.opScope2) -> (
+					producer2.nfService1.operation1.isOperationValid
+					& -- Aauth Param: requesterNFType
+					((!(producer2.nfService1.operation1.allowedNFTypes[1] = none & producer2.nfService1.operation1.allowedNFTypes[2] = none)) ->
+						( accessTokenRequest.requesterNFType in {producer2.nfService1.operation1.allowedNFTypes[1], producer2.nfService1.operation1.allowedNFTypes[2]})
+					)
+					& -- Aauth Param: nfInstanceId
+					(modelParam.requesterInfoReq & (!( producer2.nfService1.operation1.allowedNFInstances[1] = none & producer2.nfService1.operation1.allowedNFInstances[2] = none)) -> (
+							accessTokenRequest.nfInstanceId in {producer2.nfService1.operation1.allowedNFInstances[1], producer2.nfService1.operation1.allowedNFInstances[2]}
+						)
+					)
+				))      
+			)
+				: TRUE;
+			TRUE : FALSE;
+		esac;
+		
+		/-- service request check -- by NFp --/
+		ccaCheckForSR :=
+			((modelParam.CCAEnabled)-> (
+				cca.isCCAvalid
+				& cca.subject = serviceRequest.subjectID -- rethink if should be consumer.nfInstanceId
+				& cca.aud_NFType in {NFp, Both}
+			));
+		isServiceReqGranted := 
+		case
+			serviceRequest.isServiceRequestValid
+			& ccaCheckForSR
+			-- consumer.isNFInstanceValid
+			& producer.isNFInstanceValid
+			
+			& accessToken.isTokenValid
+			& serviceRequest.subjectID = accessToken.sub
+			-- & serviceRequest.subjectID = consumer.nfInstanceId
+			& serviceRequest.audienceID = producer.nfInstanceId
+			& (modelParam.atrType = specificProducer -> (accessToken.aud_NFInstanceId = producer.nfInstanceId))
+			& ((modelParam.atrType = specificNFType) -> (accessToken.aud_NFType = producer.nfType))
+			& serviceRequest.service = accessToken.scopeService 
+			& (
+				(producer.nfService1.isServiceInstanceValid & serviceRequest.service = producer.nfService1.serviceName)
+			)
+			& serviceRequest.operation in {producer.nfService1.operation1.opName}
+			& ( 
+				(serviceRequest.operation = producer.nfService1.operation1.opName) -> (
+					producer.nfService1.operation1.isOperationValid
+					-- & serviceRequest.service = producer.nfService1.serviceName
+					-- & producer.nfService1.isServiceInstanceValid
+					&
+					((producer.nfService1.operation1.opScope1 != none) -> (
+						accessToken.scopeService = producer.nfService1.operation1.opScope1
+					))
+					&
+					((producer.nfService1.operation1.opScope1 = none) -> (
+						accessToken.scopeService = producer.nfService1.serviceName
+					))
+					& 
+					((producer.nfService1.operation1.opScope2 != none) -> (
+						accessToken.scopeOperation = producer.nfService1.operation1.opScope2
+					))  
+				)
+			)
+				: TRUE;
+			TRUE: FALSE; -- isServiceReqGranted;
+		esac;
+		
+		isOperationParametersAuthorized:=
+		case
+			serviceRequest.operation = producer.nfService1.operation1.opName & producer.nfService1.operation1.isParamVerified : TRUE;
+			TRUE: FALSE;
+		esac;
+	--
+
+	ASSIGN
+		------ random (environment) variable -------
+
+		---------- init variables ----------
+		init(initConsumer) := FALSE;
+		next(initConsumer) := consumer.model_id = 0 ? TRUE: initConsumer;
+		init(initSRToScp) := FALSE;
+		next(initSRToScp) := case
+			sendSRToScp_IndirectFull_init : TRUE;
+			sendSRToScp_IndirectSRonly_init & !initSRToScp : TRUE;
+			TRUE: initSRToScp;
+		esac;
+		init(initProducer) := FALSE;
+		next(initProducer) := (producer.model_id = 0 & (isNFDiscovered1 | isNFDiscovered2)) ? TRUE: initProducer;
+		
+		init(initDiscoveryRequest) := FALSE;
+		next(initDiscoveryRequest) := case
+			(sendDiscReq_IndirectFull_specProducer_init) : TRUE;
+			(sendDiscReq_IndirectFull_specNFType_init) : TRUE;
+			(sendDiscReq_IndirectSRonly_specProducer_init) : TRUE;
+			(sendDiscReq_IndirectSRonly_specNFType_init) : TRUE;
+			TRUE: initDiscoveryRequest;
+		esac;
+		
+		init(initATRequest) := FALSE;
+		next(initATRequest) := case
+			(sendATReq_IndirectFull_specProducer_init) : TRUE;
+			(sendATReq_IndirectFull_specNFType_init) : TRUE;
+			(sendATReq_IndirectSRonly_specProducer_init): TRUE;
+			(sendATReq_IndirectSRonly_specNFType_init) : TRUE;
+			TRUE : initATRequest;
+		esac;
+		
+		init(initServiceRequest) := FALSE;
+		next(initServiceRequest) := case
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : TRUE;
+			TRUE: initServiceRequest;
+		esac;
+		
+
+		---------- consumer selection : any of consumer1 and consumer2 --------------------
+		init(consumer.model_id) := 0;
+		init(consumer.CCA_subject) := none;
+		init(consumer.nfInstanceId) := none;
+		init(consumer.nfType) := none;
+		init(consumer.allowedNFTypes[1]) := none;
+		init(consumer.allowedNFTypes[2]) := none;
+		init(consumer.nfService1.allowedNFTypes[1]) := none;
+		init(consumer.nfService1.allowedNFTypes[2]) := none;
+		init(consumer.nfService1.serviceName) := none;
+		init(consumer.nfService1.operation1.allowedNFInstances[1]) := none;
+		init(consumer.nfService1.operation1.allowedNFInstances[2]) := none;
+		init(consumer.nfService1.operation1.allowedNFTypes[1]) := none;
+		init(consumer.nfService1.operation1.allowedNFTypes[2]) := none;
+		init(consumer.nfService1.operation1.opName) := none;
+		init(consumer.nfService1.operation1.opScope1) := none;
+		init(consumer.nfService1.operation1.opScope2) := none;
+		init(consumer.nfService1.operation1.param1.isSensitive) := FALSE;
+		init(consumer.nfService1.operation1.param1.name) := none;
+		init(consumer.nfService1.operation1.param1.value) := 0;
+
+		---------- consumer NF update -----------------
+		next(consumer.model_id) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.model_id;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.model_id;
+			(consumer.model_id = consumer1.model_id) : consumer1.model_id;
+			(consumer.model_id = consumer2.model_id) : consumer2.model_id;
+			TRUE : consumer.model_id;
+		esac;
+		next(consumer.CCA_subject) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.CCA_subject;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.CCA_subject;
+			(consumer.model_id = consumer1.model_id) : consumer1.CCA_subject;
+			(consumer.model_id = consumer2.model_id) : consumer2.CCA_subject;
+			TRUE : consumer.CCA_subject;
+		esac;
+		next(consumer.nfInstanceId) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfInstanceId;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfInstanceId;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfInstanceId;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfInstanceId;
+			TRUE : consumer.nfInstanceId;
+		esac;
+		next(consumer.nfType) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfType;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfType;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfType;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfType;
+			TRUE : consumer.nfType;
+		esac;
+		next(consumer.allowedNFTypes[1]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.allowedNFTypes[1];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.allowedNFTypes[1];
+			(consumer.model_id = consumer1.model_id) : consumer1.allowedNFTypes[1];
+			(consumer.model_id = consumer2.model_id) : consumer2.allowedNFTypes[1];
+			TRUE : consumer.allowedNFTypes[1];
+		esac;
+		next(consumer.allowedNFTypes[2]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.allowedNFTypes[2];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.allowedNFTypes[2];
+			(consumer.model_id = consumer1.model_id) : consumer1.allowedNFTypes[2];
+			(consumer.model_id = consumer2.model_id) : consumer2.allowedNFTypes[2];
+			TRUE : consumer.allowedNFTypes[2];
+		esac;
+		next(consumer.nfService1.allowedNFTypes[1]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.allowedNFTypes[1];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.allowedNFTypes[1];
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.allowedNFTypes[1];
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.allowedNFTypes[1];
+			TRUE : consumer.nfService1.allowedNFTypes[1];
+		esac;
+		next(consumer.nfService1.allowedNFTypes[2]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.allowedNFTypes[2];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.allowedNFTypes[2];
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.allowedNFTypes[2];
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.allowedNFTypes[2];
+			TRUE : consumer.nfService1.allowedNFTypes[2];
+		esac;
+		next(consumer.nfService1.serviceName) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.serviceName;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.serviceName;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.serviceName;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.serviceName;
+			TRUE : consumer.nfService1.serviceName;
+		esac;
+		next(consumer.nfService1.operation1.allowedNFInstances[1]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.allowedNFInstances[1];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.allowedNFInstances[1];
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.allowedNFInstances[1];
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.allowedNFInstances[1];
+			TRUE : consumer.nfService1.operation1.allowedNFInstances[1];
+		esac;
+		next(consumer.nfService1.operation1.allowedNFInstances[2]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.allowedNFInstances[2];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.allowedNFInstances[2];
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.allowedNFInstances[2];
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.allowedNFInstances[2];
+			TRUE : consumer.nfService1.operation1.allowedNFInstances[2];
+		esac;
+		next(consumer.nfService1.operation1.allowedNFTypes[1]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.allowedNFTypes[1];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.allowedNFTypes[1];
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.allowedNFTypes[1];
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.allowedNFTypes[1];
+			TRUE : consumer.nfService1.operation1.allowedNFTypes[1];
+		esac;
+		next(consumer.nfService1.operation1.allowedNFTypes[2]) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.allowedNFTypes[2];
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.allowedNFTypes[2];
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.allowedNFTypes[2];
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.allowedNFTypes[2];
+			TRUE : consumer.nfService1.operation1.allowedNFTypes[2];
+		esac;
+		next(consumer.nfService1.operation1.opName) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.opName;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.opName;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.opName;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.opName;
+			TRUE : consumer.nfService1.operation1.opName;
+		esac;
+		next(consumer.nfService1.operation1.opScope1) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.opScope1;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.opScope1;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.opScope1;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.opScope1;
+			TRUE : consumer.nfService1.operation1.opScope1;
+		esac;
+		next(consumer.nfService1.operation1.opScope2) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.opScope2;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.opScope2;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.opScope2;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.opScope2;
+			TRUE : consumer.nfService1.operation1.opScope2;
+		esac;
+		next(consumer.nfService1.operation1.param1.isSensitive) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.param1.isSensitive;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.param1.isSensitive;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.param1.isSensitive;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.param1.isSensitive;
+			TRUE : consumer.nfService1.operation1.param1.isSensitive;
+		esac;
+		next(consumer.nfService1.operation1.param1.name) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.param1.name;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.param1.name;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.param1.name;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.param1.name;
+			TRUE : consumer.nfService1.operation1.param1.name;
+		esac;
+		next(consumer.nfService1.operation1.param1.value) := case 
+			(consumer.model_id = 0 & selectConsumer = 1) : consumer1.nfService1.operation1.param1.value;
+			(consumer.model_id = 0 & selectConsumer = 2) : consumer2.nfService1.operation1.param1.value;
+			(consumer.model_id = consumer1.model_id) : consumer1.nfService1.operation1.param1.value;
+			(consumer.model_id = consumer2.model_id) : consumer2.nfService1.operation1.param1.value;
+			TRUE : consumer.nfService1.operation1.param1.value;
+		esac;
+
+		---------- begin ServiceRequestToScp next ----------
+		next(serviceRequestToScp.subjectID) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, 1, 2, 3, 4, 5};
+			(sendSRToScp_IndirectFull_init) : consumer.nfInstanceId;
+			(sendSRToScp_IndirectFull_update) : consumer.nfInstanceId;
+
+			(sendSRToScp_IndirectSRonly_adversary) : {none, 1, 2, 3, 4,5};
+			(sendSRToScp_IndirectSRonly_init) : consumer.nfInstanceId;
+			(sendSRToScp_IndirectSRonly_update) : consumer.nfInstanceId;
+			TRUE: serviceRequestToScp.subjectID;
+		esac;
+		next(serviceRequestToScp.service) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, service_1, service_2};
+			(sendSRToScp_IndirectFull_init) : {none, service_1, service_2};
+			(sendSRToScp_IndirectFull_update) : {none, service_1, service_2};
+			
+			(sendSRToScp_IndirectSRonly_adversary) : {none, service_1, service_2};
+			(sendSRToScp_IndirectSRonly_init) : {none, prod_at_consumer.nfService1.serviceName};
+			(sendSRToScp_IndirectSRonly_update) : {none, prod_at_consumer.nfService1.serviceName};
+			TRUE: serviceRequestToScp.service;
+		esac;
+		next(serviceRequestToScp.operation) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, op_1, op_2};
+			(sendSRToScp_IndirectFull_init) : {none, op_1, op_2};
+			(sendSRToScp_IndirectFull_update) : {none, op_1, op_2};
+			
+			(sendSRToScp_IndirectSRonly_adversary) : {none, op_1, op_2};
+			(sendSRToScp_IndirectSRonly_init) : prod_at_consumer.nfService1.operation1.opName;
+			(sendSRToScp_IndirectSRonly_update) : prod_at_consumer.nfService1.operation1.opName;
+			TRUE: serviceRequestToScp.operation;
+		esac;
+		next(serviceRequestToScp.param1.isSensitive) := case
+			(sendSRToScp_IndirectFull_adversary) : {TRUE, FALSE};
+			(sendSRToScp_IndirectFull_init) : {TRUE, FALSE};
+			(sendSRToScp_IndirectFull_update) : {TRUE, FALSE};
+
+			(sendSRToScp_IndirectSRonly_adversary) : {TRUE, FALSE};
+			(sendSRToScp_IndirectSRonly_init) : prod_at_consumer.nfService1.operation1.param1.isSensitive;
+			(sendSRToScp_IndirectSRonly_update) : prod_at_consumer.nfService1.operation1.param1.isSensitive;
+			TRUE: serviceRequestToScp.param1.isSensitive;
+		esac;
+		next(serviceRequestToScp.param1.name) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, p1, p2, p3, p4};
+			(sendSRToScp_IndirectFull_init) : {none, p1, p2, p3, p4};
+			(sendSRToScp_IndirectFull_update) : {none, p1, p2, p3, p4};
+			
+			(sendSRToScp_IndirectSRonly_adversary) : {none, p1, p2, p3, p4};
+			(sendSRToScp_IndirectSRonly_init) : prod_at_consumer.nfService1.operation1.param1.name;
+			(sendSRToScp_IndirectSRonly_update) : prod_at_consumer.nfService1.operation1.param1.name;
+			TRUE: serviceRequestToScp.param1.name;
+		esac;
+		next(serviceRequestToScp.param1.value) := case
+			(sendSRToScp_IndirectFull_adversary) : 0..2;
+			(sendSRToScp_IndirectFull_init) : 0..2;
+			(sendSRToScp_IndirectFull_update) : 0..2;
+			
+			(sendSRToScp_IndirectSRonly_adversary) : 0..2;
+			(sendSRToScp_IndirectSRonly_init) : prod_at_consumer.nfService1.operation1.param1.value;
+			(sendSRToScp_IndirectSRonly_update) : prod_at_consumer.nfService1.operation1.param1.value;
+			TRUE: serviceRequestToScp.param1.value;
+		esac;
+
+		next(serviceRequestToScp.targetNFType) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, nf_1, nf_2};
+			(sendSRToScp_IndirectFull_init) : {none, nf_1, nf_2};
+			(sendSRToScp_IndirectFull_update) : {none, nf_1, nf_2};
+			
+			(sendSRToScp_IndirectSRonly_adversary) : none;
+			(sendSRToScp_IndirectSRonly_init) : none;
+			(sendSRToScp_IndirectSRonly_update) : none;
+			TRUE: serviceRequestToScp.targetNFType;
+		esac;
+		next(serviceRequestToScp.requesterNFType) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, nf_1, nf_2};
+			(sendSRToScp_IndirectFull_init) : consumer.nfType;
+			(sendSRToScp_IndirectFull_update) : consumer.nfType;
+
+			(sendSRToScp_IndirectSRonly_adversary) : none;
+			(sendSRToScp_IndirectSRonly_init) : none;
+			(sendSRToScp_IndirectSRonly_update) : none;
+			TRUE: serviceRequestToScp.requesterNFType;
+		esac;
+		next(serviceRequestToScp.targetNfInstanceId) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, 1, 2, 3, 4, 5};
+			(sendSRToScp_IndirectFull_init) : {none, 1, 2, 3, 4, 5};
+			(sendSRToScp_IndirectFull_update) : {none, 1, 2, 3, 4, 5};
+			
+			(sendSRToScp_IndirectSRonly_adversary) : {none, 1, 2, 3, 4,5};
+			(sendSRToScp_IndirectSRonly_init) : prod_at_consumer.nfInstanceId;
+			(sendSRToScp_IndirectSRonly_update) : prod_at_consumer.nfInstanceId;
+			TRUE: serviceRequestToScp.targetNfInstanceId;
+		esac;
+		next(serviceRequestToScp.scopeOperation) := case
+			(sendSRToScp_IndirectFull_adversary) : {none, op_scope_1, op_scope_2};
+			(sendSRToScp_IndirectFull_init) : {none, op_scope_1, op_scope_2};
+			(sendSRToScp_IndirectFull_update) : {none, op_scope_1, op_scope_2};
+			
+			(sendSRToScp_IndirectSRonly_adversary) : none;
+			(sendSRToScp_IndirectSRonly_init) : none;
+			(sendSRToScp_IndirectSRonly_update) : none;
+			TRUE: serviceRequestToScp.scopeOperation;
+		esac;
+
+		-- next(serviceRequestToScp.at.sub) := case
+		-- 	(modelParam.comType = IndirectSRonly & accessToken.isTokenValid): accessToken.sub;
+		-- 	TRUE: serviceRequestToScp.at.sub;
+		-- esac;
+		-- next(serviceRequestToScp.at.aud_NFInstanceId) := case
+		-- 	(modelParam.comType = IndirectSRonly & accessToken.isTokenValid): accessToken.aud_NFInstanceId;
+		-- 	TRUE: serviceRequestToScp.at.aud_NFInstanceId;
+		-- esac;
+		-- next(serviceRequestToScp.at.aud_NFType) := case
+		-- 	(modelParam.comType = IndirectSRonly & accessToken.isTokenValid): accessToken.aud_NFType;
+		-- 	TRUE: serviceRequestToScp.at.aud_NFType;
+		-- esac;
+		-- next(serviceRequestToScp.at.scopeService) := case
+		-- 	(modelParam.comType = IndirectSRonly & accessToken.isTokenValid): accessToken.scopeService;
+		-- 	TRUE: serviceRequestToScp.at.scopeService;
+		-- esac;
+		-- next(serviceRequestToScp.at.scopeOperation) := case
+		-- 	(modelParam.comType = IndirectSRonly & accessToken.isTokenValid): accessToken.scopeOperation;
+		-- 	TRUE: serviceRequestToScp.at.scopeOperation;
+		-- esac;
+		-- next(serviceRequestToScp.at.exp_) := case
+		-- 	(modelParam.comType = IndirectSRonly & accessToken.isTokenValid): accessToken.exp_;
+		-- 	TRUE: serviceRequestToScp.at.exp_;
+		-- esac;
+
+		----------------------- begin cca next ------------------------
+		next(cca.subject) := case
+			(sendSRToScp_IndirectFull_adversary & modelParam.isCCAmalicious) : {none, 1, 2, 3, 4,5};
+			(sendSRToScp_IndirectFull_init) : consumer.nfInstanceId;
+			(sendSRToScp_IndirectFull_update) : consumer.nfInstanceId;
+
+			(sendSRToScp_IndirectSRonly_adversary & modelParam.isCCAmalicious) : {none, 1, 2, 3, 4,5};
+			(sendSRToScp_IndirectSRonly_init) : consumer.nfInstanceId;
+			(sendSRToScp_IndirectSRonly_update) : consumer.nfInstanceId;
+			TRUE: cca.subject;
+		esac;
+		next(cca._exp) := case
+			(sendSRToScp_IndirectFull_adversary & modelParam.isCCAmalicious) : {FALSE, TRUE};
+			(sendSRToScp_IndirectFull_init) : FALSE;
+			(sendSRToScp_IndirectFull_update) : FALSE;
+
+			(sendSRToScp_IndirectSRonly_adversary & modelParam.isCCAmalicious) : {FALSE, TRUE};
+			(sendSRToScp_IndirectSRonly_init) : FALSE;
+			(sendSRToScp_IndirectSRonly_update) : FALSE;
+			
+			cca.isCCAvalid = TRUE & !cca._exp: {TRUE, FALSE};
+			TRUE: cca._exp;
+		esac;
+		next(cca.aud_NFType) := case
+			(sendSRToScp_IndirectFull_adversary & modelParam.isCCAmalicious) : {none, NFp, NRF, Both};
+			(sendSRToScp_IndirectFull_init) : {none, Both};
+			(sendSRToScp_IndirectFull_update) : {none, Both};
+
+			(sendSRToScp_IndirectSRonly_adversary & modelParam.isCCAmalicious) : {none, NFp, NRF, Both};
+			(sendSRToScp_IndirectSRonly_init) : {none, NFp};
+			(sendSRToScp_IndirectSRonly_update) : {none, NFp};
+			TRUE: cca.aud_NFType;
+		esac;
+		---------- end ServiceRequestToScp next ----------
+
+		---------- begin nfDiscoveryRequest next ----------
+		next(nfDiscoveryRequest.requesterID) := case
+			(initConsumer & adversaryPresent & adversaryDiscoveryRequest) : {none, 1, 2, 3, 4,5};
+			(sendDiscReq_IndirectFull_specProducer_init) : serviceRequestToScp.subjectID;
+			(sendDiscReq_IndirectFull_specProducer_update) : serviceRequestToScp.subjectID;
+			(sendDiscReq_IndirectFull_specNFType_init) : serviceRequestToScp.subjectID;
+			(sendDiscReq_IndirectFull_specNFType_update) : serviceRequestToScp.subjectID;
+
+			(sendDiscReq_IndirectSRonly_specProducer_init) : consumer.nfInstanceId;
+			(sendDiscReq_IndirectSRonly_specProducer_update) : consumer.nfInstanceId;
+			(sendDiscReq_IndirectSRonly_specNFType_init) : consumer.nfInstanceId;
+			(sendDiscReq_IndirectSRonly_specNFType_update) : consumer.nfInstanceId;
+			TRUE: nfDiscoveryRequest.requesterID;
+		esac;
+		next(nfDiscoveryRequest.targetNFType) := case
+			(initConsumer & adversaryPresent & adversaryDiscoveryRequest) : {none, nf_1, nf_2};
+			(sendDiscReq_IndirectFull_specProducer_init) : serviceRequestToScp.targetNFType;
+			(sendDiscReq_IndirectFull_specProducer_update) : serviceRequestToScp.targetNFType;
+			(sendDiscReq_IndirectFull_specNFType_init) : accessToken.aud_NFType;
+			(sendDiscReq_IndirectFull_specNFType_update) : accessToken.aud_NFType;
+
+			(sendDiscReq_IndirectSRonly_specProducer_init) : {none, nf_1, nf_2};
+			(sendDiscReq_IndirectSRonly_specProducer_update) : {none, nf_1, nf_2};
+			(sendDiscReq_IndirectSRonly_specNFType_init) : accessToken.aud_NFType;
+			(sendDiscReq_IndirectSRonly_specNFType_update) : accessToken.aud_NFType;
+			TRUE: nfDiscoveryRequest.targetNFType;
+		esac;
+		next(nfDiscoveryRequest.requesterNFType) := case
+			(initConsumer & adversaryPresent & adversaryDiscoveryRequest) : {none, nf_1, nf_2};
+			(sendDiscReq_IndirectFull_specProducer_init) : serviceRequestToScp.requesterNFType;
+			(sendDiscReq_IndirectFull_specProducer_update) : serviceRequestToScp.requesterNFType;
+			(sendDiscReq_IndirectFull_specNFType_init) : serviceRequestToScp.requesterNFType;
+			(sendDiscReq_IndirectFull_specNFType_update) : serviceRequestToScp.requesterNFType;
+
+			(sendDiscReq_IndirectSRonly_specProducer_init) : consumer.nfType;
+			(sendDiscReq_IndirectSRonly_specProducer_update) : consumer.nfType;
+			(sendDiscReq_IndirectSRonly_specNFType_init) : consumer.nfType;
+			(sendDiscReq_IndirectSRonly_specNFType_update) : consumer.nfType;
+			TRUE: nfDiscoveryRequest.requesterNFType;
+		esac;
+		next(nfDiscoveryRequest.serviceName) := case
+			(initConsumer & adversaryPresent & adversaryDiscoveryRequest) : {none, service_1, service_2};
+			(sendDiscReq_IndirectFull_specProducer_init) : serviceRequestToScp.service;
+			(sendDiscReq_IndirectFull_specProducer_update) : serviceRequestToScp.service;
+			(sendDiscReq_IndirectFull_specNFType_init) : accessToken.scopeService;
+			(sendDiscReq_IndirectFull_specNFType_update) : accessToken.scopeService;
+
+			(sendDiscReq_IndirectSRonly_specProducer_init) : {none, service_1, service_2};
+			(sendDiscReq_IndirectSRonly_specProducer_update) : {none, service_1, service_2};
+			(sendDiscReq_IndirectSRonly_specNFType_init) : accessToken.scopeService;
+			(sendDiscReq_IndirectSRonly_specNFType_update) : accessToken.scopeService;
+			TRUE: nfDiscoveryRequest.serviceName;
+		esac;
+		next(nfDiscoveryRequest.targetNfInstanceId) := case
+			(initConsumer & adversaryPresent & adversaryDiscoveryRequest) : {none, 1, 2, 3, 4,5};
+			(sendDiscReq_IndirectFull_specProducer_init) : serviceRequestToScp.targetNfInstanceId;
+			(sendDiscReq_IndirectFull_specProducer_update) : serviceRequestToScp.targetNfInstanceId;
+			(sendDiscReq_IndirectFull_specNFType_init) : serviceRequestToScp.targetNfInstanceId;
+			(sendDiscReq_IndirectFull_specNFType_update) : serviceRequestToScp.targetNfInstanceId;
+
+			(sendDiscReq_IndirectSRonly_specProducer_init) : {none, producer1.nfInstanceId, producer2.nfInstanceId};
+			(sendDiscReq_IndirectSRonly_specProducer_update) : {none, producer1.nfInstanceId, producer2.nfInstanceId};
+			(sendDiscReq_IndirectSRonly_specNFType_init) : {none, 1, 2, 3, 4,5};
+			(sendDiscReq_IndirectSRonly_specNFType_update) : {none, 1, 2, 3, 4,5};
+			TRUE: nfDiscoveryRequest.targetNfInstanceId;
+		esac;
+
+		---------- begin producer init ----------
+		init(producer.model_id) := 0;
+		init(producer.CCA_subject) := none;
+		init(producer.nfInstanceId) := none;
+		init(producer.nfType) := none;
+		init(producer.allowedNFTypes[1]) := none;
+		init(producer.allowedNFTypes[2]) := none;
+		init(producer.nfService1.allowedNFTypes[1]) := none;
+		init(producer.nfService1.allowedNFTypes[2]) := none;
+		init(producer.nfService1.serviceName) := none;
+		init(producer.nfService1.operation1.allowedNFInstances[1]) := none;
+		init(producer.nfService1.operation1.allowedNFInstances[2]) := none;
+		init(producer.nfService1.operation1.allowedNFTypes[1]) := none;
+		init(producer.nfService1.operation1.allowedNFTypes[2]) := none;
+		init(producer.nfService1.operation1.opName) := none;
+		init(producer.nfService1.operation1.opScope1) := none;
+		init(producer.nfService1.operation1.opScope2) := none;
+		init(producer.nfService1.operation1.param1.isSensitive) := FALSE;
+		init(producer.nfService1.operation1.param1.name) := none;
+		init(producer.nfService1.operation1.param1.value) := 0;
+
+		---------- begin producer next ----------
+		next(producer.model_id) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.model_id;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.model_id;
+			(isNFDiscovered1) : producer1.model_id;
+			(isNFDiscovered2) : producer2.model_id;
+			(producer.model_id = producer1.model_id) : producer1.model_id;
+			(producer.model_id = producer2.model_id) : producer2.model_id;
+			TRUE : producer.model_id;
+		esac;
+		next(producer.CCA_subject) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.CCA_subject;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.CCA_subject;
+			(isNFDiscovered1) : producer1.CCA_subject;
+			(isNFDiscovered2) : producer2.CCA_subject;
+			(producer.model_id = producer1.model_id) : producer1.CCA_subject;
+			(producer.model_id = producer2.model_id) : producer2.CCA_subject;
+			TRUE : producer.CCA_subject;
+		esac;
+		next(producer.nfInstanceId) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfInstanceId;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfInstanceId;
+			(isNFDiscovered1) : producer1.nfInstanceId;
+			(isNFDiscovered2) : producer2.nfInstanceId;
+			(producer.model_id = producer1.model_id) : producer1.nfInstanceId;
+			(producer.model_id = producer2.model_id) : producer2.nfInstanceId;
+			TRUE : producer.nfInstanceId;
+		esac;
+		next(producer.nfType) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfType;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfType;
+			(isNFDiscovered1) : producer1.nfType;
+			(isNFDiscovered2) : producer2.nfType;
+			(producer.model_id = producer1.model_id) : producer1.nfType;
+			(producer.model_id = producer2.model_id) : producer2.nfType;
+			TRUE : producer.nfType;
+		esac;
+		next(producer.allowedNFTypes[1]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.allowedNFTypes[1];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.allowedNFTypes[1];
+			(isNFDiscovered1) : producer1.allowedNFTypes[1];
+			(isNFDiscovered2) : producer2.allowedNFTypes[1];
+			(producer.model_id = producer1.model_id) : producer1.allowedNFTypes[1];
+			(producer.model_id = producer2.model_id) : producer2.allowedNFTypes[1];
+			TRUE : producer.allowedNFTypes[1];
+		esac;
+		next(producer.allowedNFTypes[2]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.allowedNFTypes[2];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.allowedNFTypes[2];
+			(isNFDiscovered1) : producer1.allowedNFTypes[2];
+			(isNFDiscovered2) : producer2.allowedNFTypes[2];
+			(producer.model_id = producer1.model_id) : producer1.allowedNFTypes[2];
+			(producer.model_id = producer2.model_id) : producer2.allowedNFTypes[2];
+			TRUE : producer.allowedNFTypes[2];
+		esac;
+		next(producer.nfService1.allowedNFTypes[1]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.allowedNFTypes[1];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.allowedNFTypes[1];
+			(isNFDiscovered1) : producer1.nfService1.allowedNFTypes[1];
+			(isNFDiscovered2) : producer2.nfService1.allowedNFTypes[1];
+			(producer.model_id = producer1.model_id) : producer1.nfService1.allowedNFTypes[1];
+			(producer.model_id = producer2.model_id) : producer2.nfService1.allowedNFTypes[1];
+			TRUE : producer.nfService1.allowedNFTypes[1];
+		esac;
+		next(producer.nfService1.allowedNFTypes[2]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.allowedNFTypes[2];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.allowedNFTypes[2];
+			(isNFDiscovered1) : producer1.nfService1.allowedNFTypes[2];
+			(isNFDiscovered2) : producer2.nfService1.allowedNFTypes[2];
+			(producer.model_id = producer1.model_id) : producer1.nfService1.allowedNFTypes[2];
+			(producer.model_id = producer2.model_id) : producer2.nfService1.allowedNFTypes[2];
+			TRUE : producer.nfService1.allowedNFTypes[2];
+		esac;
+		next(producer.nfService1.serviceName) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.serviceName;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.serviceName;
+			(isNFDiscovered1) : producer1.nfService1.serviceName;
+			(isNFDiscovered2) : producer2.nfService1.serviceName;
+			(producer.model_id = producer1.model_id) : producer1.nfService1.serviceName;
+			(producer.model_id = producer2.model_id) : producer2.nfService1.serviceName;
+			TRUE : producer.nfService1.serviceName;
+		esac;
+		next(producer.nfService1.operation1.allowedNFInstances[1]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.allowedNFInstances[1];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.allowedNFInstances[1];
+			(isNFDiscovered1) : producer1.nfService1.operation1.allowedNFInstances[1];
+			(isNFDiscovered2) : producer2.nfService1.operation1.allowedNFInstances[1];
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.allowedNFInstances[1];
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.allowedNFInstances[1];
+			TRUE : producer.nfService1.operation1.allowedNFInstances[1];
+		esac;
+		next(producer.nfService1.operation1.allowedNFInstances[2]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.allowedNFInstances[2];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.allowedNFInstances[2];
+			(isNFDiscovered1) : producer1.nfService1.operation1.allowedNFInstances[2];
+			(isNFDiscovered2) : producer2.nfService1.operation1.allowedNFInstances[2];
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.allowedNFInstances[2];
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.allowedNFInstances[2];
+			TRUE : producer.nfService1.operation1.allowedNFInstances[2];
+		esac;
+		next(producer.nfService1.operation1.allowedNFTypes[1]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.allowedNFTypes[1];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.allowedNFTypes[1];
+			(isNFDiscovered1) : producer1.nfService1.operation1.allowedNFTypes[1];
+			(isNFDiscovered2) : producer2.nfService1.operation1.allowedNFTypes[1];
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.allowedNFTypes[1];
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.allowedNFTypes[1];
+			TRUE : producer.nfService1.operation1.allowedNFTypes[1];
+		esac;
+		next(producer.nfService1.operation1.allowedNFTypes[2]) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.allowedNFTypes[2];
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.allowedNFTypes[2];
+			(isNFDiscovered1) : producer1.nfService1.operation1.allowedNFTypes[2];
+			(isNFDiscovered2) : producer2.nfService1.operation1.allowedNFTypes[2];
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.allowedNFTypes[2];
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.allowedNFTypes[2];
+			TRUE : producer.nfService1.operation1.allowedNFTypes[2];
+		esac;
+		next(producer.nfService1.operation1.opName) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.opName;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.opName;
+			(isNFDiscovered1) : producer1.nfService1.operation1.opName;
+			(isNFDiscovered2) : producer2.nfService1.operation1.opName;
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.opName;
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.opName;
+			TRUE : producer.nfService1.operation1.opName;
+		esac;
+		next(producer.nfService1.operation1.opScope1) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.opScope1;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.opScope1;
+			(isNFDiscovered1) : producer1.nfService1.operation1.opScope1;
+			(isNFDiscovered2) : producer2.nfService1.operation1.opScope1;
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.opScope1;
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.opScope1;
+			TRUE : producer.nfService1.operation1.opScope1;
+		esac;
+		next(producer.nfService1.operation1.opScope2) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.opScope2;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.opScope2;
+			(isNFDiscovered1) : producer1.nfService1.operation1.opScope2;
+			(isNFDiscovered2) : producer2.nfService1.operation1.opScope2;
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.opScope2;
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.opScope2;
+			TRUE : producer.nfService1.operation1.opScope2;
+		esac;
+		next(producer.nfService1.operation1.param1.isSensitive) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.param1.isSensitive;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.param1.isSensitive;
+			(isNFDiscovered1) : producer1.nfService1.operation1.param1.isSensitive;
+			(isNFDiscovered2) : producer2.nfService1.operation1.param1.isSensitive;
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.param1.isSensitive;
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.param1.isSensitive;
+			TRUE : producer.nfService1.operation1.param1.isSensitive;
+		esac;
+		next(producer.nfService1.operation1.param1.name) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.param1.name;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.param1.name;
+			(isNFDiscovered1) : producer1.nfService1.operation1.param1.name;
+			(isNFDiscovered2) : producer2.nfService1.operation1.param1.name;
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.param1.name;
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.param1.name;
+			TRUE : producer.nfService1.operation1.param1.name;
+		esac;
+		next(producer.nfService1.operation1.param1.value) := case 
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 1) : producer1.nfService1.operation1.param1.value;
+			(isNFDiscovered1 & isNFDiscovered2 & selectProducer = 2) : producer2.nfService1.operation1.param1.value;
+			(isNFDiscovered1) : producer1.nfService1.operation1.param1.value;
+			(isNFDiscovered2) : producer2.nfService1.operation1.param1.value;
+			(producer.model_id = producer1.model_id) : producer1.nfService1.operation1.param1.value;
+			(producer.model_id = producer2.model_id) : producer2.nfService1.operation1.param1.value;
+			TRUE : producer.nfService1.operation1.param1.value;
+		esac;
+
+		---------- begin prod_at_consumer init ----------
+		init(prod_at_consumer.model_id) := 0;
+		init(prod_at_consumer.CCA_subject) := none;
+		init(prod_at_consumer.nfInstanceId) := none;
+		init(prod_at_consumer.nfType) := none;
+		init(prod_at_consumer.allowedNFTypes[1]) := none;
+		init(prod_at_consumer.allowedNFTypes[2]) := none;
+		init(prod_at_consumer.nfService1.allowedNFTypes[1]) := none;
+		init(prod_at_consumer.nfService1.allowedNFTypes[2]) := none;
+		init(prod_at_consumer.nfService1.serviceName) := none;
+		init(prod_at_consumer.nfService1.operation1.allowedNFInstances[1]) := none;
+		init(prod_at_consumer.nfService1.operation1.allowedNFInstances[2]) := none;
+		init(prod_at_consumer.nfService1.operation1.allowedNFTypes[1]) := none;
+		init(prod_at_consumer.nfService1.operation1.allowedNFTypes[2]) := none;
+		init(prod_at_consumer.nfService1.operation1.opName) := none;
+		init(prod_at_consumer.nfService1.operation1.opScope1) := none;
+		init(prod_at_consumer.nfService1.operation1.opScope2) := none;
+		init(prod_at_consumer.nfService1.operation1.param1.isSensitive) := FALSE;
+		init(prod_at_consumer.nfService1.operation1.param1.name) := none;
+		init(prod_at_consumer.nfService1.operation1.param1.value) := 0;
+		
+		---------- begin prod_at_consumer next ----------
+		/-- if (r = TRUE) -> prod_at_consumer = prod_at_vNR (+ vNRF adversary impact) 
+			else if (r = FALSE) build from DR
+		--/
+		next(prod_at_consumer.model_id) := case
+			-- i.e. m != D and r = FALSE:
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1) : producer1.model_id;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2) : producer2.model_id;
+			(nrfIsNFDiscovered1) : producer1.model_id;
+			(nrfIsNFDiscovered2) : producer2.model_id;
+			TRUE : prod_at_consumer.model_id;
+		esac;
+		next(prod_at_consumer.CCA_subject) := case 
+			-- i.e. m != D and r = FALSE:
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1) : producer1.CCA_subject;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2) : producer2.CCA_subject;
+			(nrfIsNFDiscovered1) : producer1.CCA_subject;
+			(nrfIsNFDiscovered2) : producer2.CCA_subject;
+			TRUE : prod_at_consumer.CCA_subject;
+		esac;
+		next(prod_at_consumer.nfInstanceId) := case 
+			-- i.e. m != D and r = FALSE:
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1) : producer1.nfInstanceId;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2) : producer2.nfInstanceId;
+			(nrfIsNFDiscovered1) : producer1.nfInstanceId;
+			(nrfIsNFDiscovered2) : producer2.nfInstanceId;
+			TRUE : prod_at_consumer.nfInstanceId;
+		esac;
+		next(prod_at_consumer.nfType) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1) : producer1.nfType;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2) : producer2.nfType;
+			(nrfIsNFDiscovered1) : producer1.nfType;
+			(nrfIsNFDiscovered2) : producer2.nfType;
+			TRUE : prod_at_consumer.nfType;
+		esac;
+		next(prod_at_consumer.allowedNFTypes[1]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1) : producer1.allowedNFTypes[1];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2) : producer2.allowedNFTypes[1];
+			(nrfIsNFDiscovered1) : producer1.allowedNFTypes[1];
+			(nrfIsNFDiscovered2) : producer2.allowedNFTypes[1];
+			TRUE : prod_at_consumer.allowedNFTypes[1];
+		esac;
+		next(prod_at_consumer.allowedNFTypes[2]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1) : producer1.allowedNFTypes[2];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2) : producer2.allowedNFTypes[2];
+			(nrfIsNFDiscovered1) : producer1.allowedNFTypes[2];
+			(nrfIsNFDiscovered2) : producer2.allowedNFTypes[2];
+			TRUE : prod_at_consumer.allowedNFTypes[2];
+		esac;
+		next(prod_at_consumer.nfService1.allowedNFTypes[1]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.allowedNFTypes[1];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.allowedNFTypes[1];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.allowedNFTypes[1];
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.allowedNFTypes[1];
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.allowedNFTypes[1];
+		esac;
+		next(prod_at_consumer.nfService1.allowedNFTypes[2]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.allowedNFTypes[2];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.allowedNFTypes[2];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.allowedNFTypes[2];
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.allowedNFTypes[2];
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.allowedNFTypes[2];
+		esac;
+		next(prod_at_consumer.nfService1.serviceName) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.serviceName;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.serviceName;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.serviceName;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.serviceName;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.serviceName;
+		esac;
+		next(prod_at_consumer.nfService1.operation1.allowedNFInstances[1]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFInstances[1];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFInstances[1];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFInstances[1];
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFInstances[1];
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.allowedNFInstances[1];
+		esac;
+		next(prod_at_consumer.nfService1.operation1.allowedNFInstances[2]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFInstances[2];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFInstances[2];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFInstances[2];
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFInstances[2];
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.allowedNFInstances[2];
+		esac;
+		next(prod_at_consumer.nfService1.operation1.allowedNFTypes[1]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFTypes[1];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFTypes[1];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFTypes[1];
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFTypes[1];
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.allowedNFTypes[1];
+		esac;
+		next(prod_at_consumer.nfService1.operation1.allowedNFTypes[2]) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFTypes[2];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFTypes[2];
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.allowedNFTypes[2];
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.allowedNFTypes[2];
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.allowedNFTypes[2];
+		esac;
+		next(prod_at_consumer.nfService1.operation1.opName) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.opName;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.opName;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.opName;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.opName;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.opName;
+		esac;
+		next(prod_at_consumer.nfService1.operation1.opScope1) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.opScope1;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.opScope1;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.opScope1;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.opScope1;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.opScope1;
+		esac;
+		next(prod_at_consumer.nfService1.operation1.opScope2) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.opScope2;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.opScope2;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.opScope2;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.opScope2;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.opScope2;
+		esac;
+		next(prod_at_consumer.nfService1.operation1.param1.isSensitive) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.param1.isSensitive;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : FALSE;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.param1.isSensitive;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : FALSE;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.param1.isSensitive;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : FALSE;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.param1.isSensitive;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : FALSE;
+			TRUE : prod_at_consumer.nfService1.operation1.param1.isSensitive;
+		esac;
+		next(prod_at_consumer.nfService1.operation1.param1.name) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.param1.name;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.param1.name;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.param1.name;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : none;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.param1.name;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : none;
+			TRUE : prod_at_consumer.nfService1.operation1.param1.name;
+		esac;
+		next(prod_at_consumer.nfService1.operation1.param1.value) := case
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.param1.value;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : 0;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.param1.value;
+			(nrfIsNFDiscovered1 & nrfIsNFDiscovered2 & selectProducer = 2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : 0;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName in {none, producer1.nfService1.serviceName}) : producer1.nfService1.operation1.param1.value;
+			(nrfIsNFDiscovered1 & nfDiscoveryRequest.serviceName != producer1.nfService1.serviceName) : 0;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName in {none, producer2.nfService1.serviceName}) : producer2.nfService1.operation1.param1.value;
+			(nrfIsNFDiscovered2 & nfDiscoveryRequest.serviceName != producer2.nfService1.serviceName) : 0;
+			TRUE : prod_at_consumer.nfService1.operation1.param1.value;
+		esac;
+
+		---------- begin AccessToken next ----------
+		/-- if (r = TRUE) -> accessToken = vNRFaccessToken (assuming no adversary impact and ATscp = AT and C2 not implemented) 
+			else if (r = FALSE) -> build from accessTokenRequest
+			
+		--/
+		next(accessToken.sub) := case
+			isAccessTokenReqAuthorized : accessTokenRequest.nfInstanceId;
+			TRUE : accessToken.sub;
+		esac;
+		next(accessToken.aud_NFInstanceId) := case
+			isAccessTokenReqAuthorized & modelParam.atrType = specificProducer : accessTokenRequest.targetNfInstanceId;
+			isAccessTokenReqAuthorized & modelParam.atrType = specificNFType : none;
+			TRUE : accessToken.aud_NFInstanceId;
+		esac;
+		next(accessToken.aud_NFType) := case
+			isAccessTokenReqAuthorized & modelParam.atrType = specificProducer : none;
+			isAccessTokenReqAuthorized & modelParam.atrType = specificNFType : accessTokenRequest.targetNFType;
+			TRUE : accessToken.aud_NFType;
+		esac;
+		next(accessToken.scopeService) := case
+			isAccessTokenReqAuthorized : accessTokenRequest.scopeService;
+			TRUE : accessToken.scopeService;
+		esac;
+		next(accessToken.scopeOperation) := case
+			isAccessTokenReqAuthorized & isOpLevelATReqAuthorized: accessTokenRequest.scopeOperation;
+			TRUE : accessToken.scopeOperation;
+		esac;
+		next(accessToken.exp_) := case
+			isAccessTokenReqAuthorized : FALSE;
+			!(accessToken.exp_) : {TRUE, FALSE};
+			TRUE : accessToken.exp_;
+		esac;
+
+		---------- begin AccessTokenRequest next ----------
+		next(accessTokenRequest.nfInstanceId) := case
+			(initConsumer & adversaryPresent & adversaryATRequest) : {none, 1, 2, 3, 4,5};
+			(sendATReq_IndirectFull_specProducer_init) : serviceRequestToScp.subjectID;
+			(sendATReq_IndirectFull_specProducer_update) : serviceRequestToScp.subjectID;
+			(sendATReq_IndirectFull_specNFType_init) : serviceRequestToScp.subjectID;
+			(sendATReq_IndirectFull_specNFType_update) : serviceRequestToScp.subjectID;
+
+			(sendATReq_IndirectSRonly_specProducer_init) : consumer.nfInstanceId;
+			(sendATReq_IndirectSRonly_specProducer_update) : consumer.nfInstanceId;
+			(sendATReq_IndirectSRonly_specNFType_init) : consumer.nfInstanceId;
+			(sendATReq_IndirectSRonly_specNFType_update) : consumer.nfInstanceId;
+			TRUE: accessTokenRequest.nfInstanceId;
+		esac;
+		next(accessTokenRequest.scopeService) := case
+			(initConsumer & adversaryPresent & adversaryATRequest) : {none, service_1, service_2};
+			(sendATReq_IndirectFull_specProducer_init) : {none, prod_at_consumer.nfService1.serviceName};
+			(sendATReq_IndirectFull_specProducer_update) : {none, prod_at_consumer.nfService1.serviceName};
+			(sendATReq_IndirectFull_specNFType_init) : serviceRequestToScp.service;
+			(sendATReq_IndirectFull_specNFType_update) : serviceRequestToScp.service;
+
+			(sendATReq_IndirectSRonly_specProducer_init) : {none, prod_at_consumer.nfService1.serviceName};
+			(sendATReq_IndirectSRonly_specProducer_update) : {none, prod_at_consumer.nfService1.serviceName};
+			(sendATReq_IndirectSRonly_specNFType_init) : {none, service_1, service_2};
+			(sendATReq_IndirectSRonly_specNFType_update) : {none, service_1, service_2};
+			TRUE: accessTokenRequest.scopeService;
+		esac;
+		next(accessTokenRequest.scopeOperation) := case
+			(initConsumer & adversaryPresent & adversaryATRequest) : {none, op_scope_1, op_scope_2};
+			(sendATReq_IndirectFull_specProducer_init) : {none, prod_at_consumer.nfService1.operation1.opScope2};
+			(sendATReq_IndirectFull_specProducer_update) : {none, prod_at_consumer.nfService1.operation1.opScope2};
+			(sendATReq_IndirectFull_specNFType_init) : {none, serviceRequestToScp.scopeOperation};
+			(sendATReq_IndirectFull_specNFType_update) : {none, serviceRequestToScp.scopeOperation};
+			
+			(sendATReq_IndirectSRonly_specProducer_init) : {none, prod_at_consumer.nfService1.operation1.opScope2};
+			(sendATReq_IndirectSRonly_specProducer_update) : {none, prod_at_consumer.nfService1.operation1.opScope2};
+			(sendATReq_IndirectSRonly_specNFType_init) : {none, op_scope_1, op_scope_2};
+			(sendATReq_IndirectSRonly_specNFType_update) : {none, op_scope_1, op_scope_2};
+			TRUE: accessTokenRequest.scopeOperation;
+		esac;
+		next(accessTokenRequest.targetNFType) := case
+			(initConsumer & adversaryPresent & adversaryATRequest) : {none, nf_1, nf_2};
+			(sendATReq_IndirectFull_specProducer_init) : {none, serviceRequestToScp.targetNFType};
+			(sendATReq_IndirectFull_specProducer_update) : {none, serviceRequestToScp.targetNFType};
+			(sendATReq_IndirectFull_specNFType_init) : {none, serviceRequestToScp.targetNFType};
+			(sendATReq_IndirectFull_specNFType_update) : {none, serviceRequestToScp.targetNFType};
+			
+			(sendATReq_IndirectSRonly_specProducer_init) : {none, nf_1, nf_2};
+			(sendATReq_IndirectSRonly_specProducer_update) : {none, nf_1, nf_2};
+			(sendATReq_IndirectSRonly_specNFType_init) : {none, nf_1, nf_2};
+			(sendATReq_IndirectSRonly_specNFType_update) : {none, nf_1, nf_2};
+			TRUE: accessTokenRequest.targetNFType;
+		esac;
+		next(accessTokenRequest.targetNfInstanceId) := case
+			(initConsumer & adversaryPresent & adversaryATRequest) : {none, 1, 2, 3, 4,5};
+			(sendATReq_IndirectFull_specProducer_init) : {none, prod_at_consumer.nfInstanceId};
+			(sendATReq_IndirectFull_specProducer_update) : {none, prod_at_consumer.nfInstanceId};
+			(sendATReq_IndirectFull_specNFType_init) : {none, prod_at_consumer.nfInstanceId};
+			(sendATReq_IndirectFull_specNFType_update) : {none, prod_at_consumer.nfInstanceId};
+			
+			(sendATReq_IndirectSRonly_specProducer_init) : {none, prod_at_consumer.nfInstanceId};
+			(sendATReq_IndirectSRonly_specProducer_update) : {none, prod_at_consumer.nfInstanceId};
+			(sendATReq_IndirectSRonly_specNFType_init) : {none, prod_at_consumer.nfInstanceId};
+			(sendATReq_IndirectSRonly_specNFType_update) : {none, prod_at_consumer.nfInstanceId};
+			TRUE: accessTokenRequest.targetNfInstanceId;
+		esac;
+		next(accessTokenRequest.requesterNFType) := case
+			(initConsumer & adversaryPresent & adversaryATRequest) : {none, nf_1, nf_2};
+			(sendATReq_IndirectFull_specProducer_init) : {none, serviceRequestToScp.requesterNFType};
+			(sendATReq_IndirectFull_specProducer_update) : {none, serviceRequestToScp.requesterNFType};
+			(sendATReq_IndirectFull_specNFType_init) : {none, serviceRequestToScp.requesterNFType};
+			(sendATReq_IndirectFull_specNFType_update) : {none, serviceRequestToScp.requesterNFType};
+
+			(sendATReq_IndirectSRonly_specProducer_init) : {none, consumer.nfType};
+			(sendATReq_IndirectSRonly_specProducer_update) : {none, consumer.nfType};
+			(sendATReq_IndirectSRonly_specNFType_init) : {none, consumer.nfType};
+			(sendATReq_IndirectSRonly_specNFType_update) : {none, consumer.nfType};
+			TRUE: accessTokenRequest.requesterNFType;
+		esac;
+
+		---------- begin ServiceRequest next ----------
+		next(serviceRequest.subjectID) := case
+			(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : {none, 1, 2, 3, 4,5};
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.subjectID;
+			(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.subjectID;
+			TRUE: serviceRequest.subjectID;
+		esac;
+		next(serviceRequest.audienceID) := case -- working
+			(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : {none, 1, 2, 3, 4,5};
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.targetNfInstanceId;
+			(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.targetNfInstanceId;
+			TRUE: serviceRequest.audienceID;
+		esac;
+		next(serviceRequest.service) := case
+			(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : {none, service_1, service_2};
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.service;
+			(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.service;
+			TRUE: serviceRequest.service;
+		esac;
+		next(serviceRequest.operation) := case
+			(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : {none, op_1, op_2};
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.operation;
+			(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.operation;
+			TRUE: serviceRequest.operation;
+		esac;
+		next(serviceRequest.param1.isSensitive) := case
+			(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : {TRUE, FALSE};
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.param1.isSensitive;
+			(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.param1.isSensitive;
+			TRUE: serviceRequest.param1.isSensitive;
+		esac;
+		next(serviceRequest.param1.name) := case
+			(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : {none, p1, p2, p3, p4};
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.param1.name;
+			(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.param1.name;
+			TRUE: serviceRequest.param1.name;
+		esac;
+		next(serviceRequest.param1.value) := case
+			(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : 0..2;
+			(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.param1.value;
+			(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.param1.value;
+			TRUE: serviceRequest.param1.value;
+		esac;
+
+		-------------- begin ccaAtScp next ------------
+		-- next(ccaAtScp.subject) := case
+		-- 	serviceRequestToScp.cca.isCCAvalid: serviceRequestToScp.cca.subject;
+		-- 	TRUE: ccaAtScp.subject;
+		-- esac;
+		-- next(ccaAtScp._exp) := case
+		-- 	serviceRequestToScp.cca.isCCAvalid & ccaExpired : {TRUE, FALSE}
+		-- 	serviceRequestToScp.cca._exp = FALSE & (sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : {TRUE, FALSE};
+		-- 	serviceRequestToScp.cca._exp = FALSE & (sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : {TRUE, FALSE};
+		-- 	serviceRequestToScp.cca._exp = FALSE & (sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : {TRUE, FALSE};
+
+		-- 	(sendServReq_Direct_adversary) : FALSE;
+		-- 	(sendServReq_Direct_init) : FALSE;
+		-- 	(sendServReq_Direct_update) : FALSE;
+		-- 	TRUE: ccaAtScp._exp;
+		-- esac;
+		-- next(ccaAtScp.aud_NFType) := case
+		-- 	(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : serviceRequestToScp.cca.aud_NFType;
+		-- 	(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.cca.aud_NFType;
+		-- 	(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.cca.aud_NFType;
+
+		-- 	(sendServReq_Direct_adversary) : none;
+		-- 	(s endServReq_Direct_init) : none;
+		-- 	(sendServReq_Direct_update) : none;
+		-- 	TRUE: ccaAtScp.aud_NFType;
+		-- esac;
+		-- next(ccaAtScp.forNrf) := case
+		-- 	(sendServReq_IndirectFull_adversary | sendServReq_IndirectSRonly_adversary) : serviceRequestToScp.cca.forNrf;
+		-- 	(sendServReq_IndirectFull_init | sendServReq_IndirectSRonly_init) : serviceRequestToScp.cca.forNrf;
+		-- 	(sendServReq_IndirectFull_update | sendServReq_IndirectSRonly_update) : serviceRequestToScp.cca.forNrf;
+
+		-- 	(sendServReq_Direct_adversary) : FALSE;
+		-- 	(sendServReq_Direct_init) : FALSE;
+		-- 	(sendServReq_Direct_update) : FALSE;
+		-- 	TRUE: ccaAtScp.forNrf;
+		-- esac;
+	--
+--
